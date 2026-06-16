@@ -1,17 +1,24 @@
 from datetime import timedelta
-from os import getenv
+from os import getenv, path
 from pathlib import Path
 
 from common.utils import as_bool
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
-
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
+# Load environment variables
+env_path = path.join(BASE_DIR, ".docker-envs", ".env.dev")
+if path.isfile(env_path):
+    load_dotenv(dotenv_path=env_path)
+else:
+    load_dotenv()
+
+
 # Security
-SECRET_KEY = getenv("DJANGO_SECRET_KEY")
+SECRET_KEY = getenv(
+    "DJANGO_SECRET_KEY",
+)
 ADMIN_EMAIL = getenv("ADMIN_EMAIL")
 ADMIN_PASSWORD = getenv("ADMIN_PASSWORD")
 
@@ -21,6 +28,7 @@ LOCAL_APPS = [
     "core.apps.CoreConfig",
     "common.apps.CommonConfig",
     "tasks.apps.TasksConfig",
+    "interactions.apps.InteractionsConfig",
 ]
 
 THIRD_PARTY_APPS = [
