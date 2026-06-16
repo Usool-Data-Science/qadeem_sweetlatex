@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+  font-family: 'Myriad Pro';
+  src: url('frontend/public/fonts/Myriad Pro/MYRIADPRO-REGULAR.OTF') format('opentype'),
+       url('frontend/public/fonts/Myriad Pro/MYRIADPRO-BOLD.OTF') format('opentype'),
+       url('frontend/public/fonts/Myriad Pro/MYRIADPRO-SEMIBOLD.OTF') format('opentype'),
+       url('frontend/public/fonts/Myriad Pro/MYRIADPRO-LIGHT.OTF') format('opentype'),
+       url('frontend/public/fonts/Myriad Pro/MYRIADPRO-COND.OTF') format('opentype');
+  font-weight: normal;
+  font-style: normal;
+}
+
+input:-webkit-autofill {
+  appearance: none;
+  -webkit-box-shadow: 0 0 0px 1000px #1f2937 inset; /* Override the background color */
+  box-shadow: 0 0 0px 1000px #1f2937 inset; /* Override the background color */
+  -webkit-text-fill-color: #ffffff !important; /* Text color */
+  transition: background-color 5000s ease-in-out 0s; /* Prevent flash of autofill color */
+}

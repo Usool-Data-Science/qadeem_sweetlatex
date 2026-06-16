@@ -1,0 +1,132 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    hostname: postgres
+    restart: always
+    env_file:
+      - ./backend/.docker-envs/.env.stagging
+    volumes:
+      - /mnt/sweetlatex_db/postgres:/var/lib/postgresql/data
+      - postgres_backups:/backups
+    networks:
+      - mynet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: always
+    networks:
+      - mynet
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  api:
+    build: ./backend
+    container_name: api
+    command: gunicorn -c gunicorn_config.py sweetlatexBE.wsgi
+    restart: always
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ./backend/.docker-envs/.env.stagging
+    environment:
+      - DJANGO_SETTINGS_MODULE=sweetlatexBE.settings.stagging
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+    networks:
+      - mynet
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  celery:
+    build: ./backend
+    command: celery -A sweetlatexBE worker -l INFO
+    container_name: celery
+    restart: always
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ./backend/.docker-envs/.env.stagging
+    environment:
+      - DJANGO_SETTINGS_MODULE=sweetlatexBE.settings.stagging
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+      - postgres_backups:/backups
+      - ./secrets/backup_deploy_key:/run/secrets/backup_key:ro
+    networks:
+      - mynet
+
+  celery_beat:
+    build: ./backend
+    command: celery -A sweetlatexBE beat -l INFO
+      --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    container_name: celery_beat
+    restart: always
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ./backend/.docker-envs/.env.stagging
+    environment:
+      - DJANGO_SETTINGS_MODULE=sweetlatexBE.settings.stagging
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+      - postgres_backups:/backups
+    networks:
+      - mynet
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    container_name: frontend
+    ports:
+      - "80:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - mynet
+    volumes:
+      - static_files:/app/staticfiles:ro
+      - media_files:/app/media:ro
+
+volumes:
+  postgres_backups:
+  static_files:
+  media_files:
+
+networks:
+  mynet:
+    driver: bridge

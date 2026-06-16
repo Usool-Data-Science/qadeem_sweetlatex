@@ -1,0 +1,5 @@
+1. First install the requirements
+2. Build models, 
+3. Setup djoser:
+- Checkout djoser docs https://djoser.readthedocs.io/en/latest/getting_started.html and also corsheaders https://pypi.org/project/django-cors-headers/ for our installation
+4. Migrate your database.

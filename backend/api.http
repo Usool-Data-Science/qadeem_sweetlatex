@@ -1,0 +1,158 @@
+####### AUTHENTICATION REQUESTS
+### CREATE USER
+POST http://127.0.0.1:8000/auth/users/
+Content-Type: application/json
+
+{
+    "email": "myownde2018@gmail.com",
+    "password": "testpassword123!",
+    "re_password": "testpassword123!"
+}
+
+### ACTIVATE USER
+POST http://127.0.0.1:8000/auth/users/activation/
+Content-Type: application/json
+
+{
+    "uid": "MQ",
+    "token": "d72chy-0839a2b8e93a15217b211c3aa9dab8e7"
+}
+
+### LOGIN USER
+POST http://127.0.0.1:8000/auth/login/
+Content-Type: application/json
+
+{
+    "email": "myownde2018@gmail.com",
+    "password": "testpassword123!"
+}
+
+### REFRESH USER TOKEN
+POST http://127.0.0.1:8000/auth/refresh/
+Content-Type: application/json
+
+{
+    "refresh": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTc3Njc4NzgyNSwiaWF0IjoxNzc2NzAxNDI1LCJqdGkiOiI5ZmI4MzExZDNmNWQ0ZGJkYjhmN2M2OTIxZWZmYjhhNCIsInVzZXJfaWQiOiIxIn0.HXxBNhPJnfdJccBYB7qXG3pMDd_KHLawuMzcY4sd3RE"
+}
+
+### VERIFY USER TOKEN (token = access_token)
+POST http://127.0.0.1:8000/auth/jwt/verify/
+Content-Type: application/json
+
+{
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc2NzAzNTEyLCJpYXQiOjE3NzY3MDI2MTIsImp0aSI6ImIzOTg4MTc1ZGE4ZDRjOTQ4ODE4NDA1NWQ3YWFlYmYwIiwidXNlcl9pZCI6IjEifQ.wbpKKSr9F3vjr2dNuppuDVixgzu8JqIpjCsE4t2DLsQ"
+}
+
+### RETRIEVE CURRENT USER
+GET http://127.0.0.1:8000/auth/users/me
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc2NzAzNTEyLCJpYXQiOjE3NzY3MDI2MTIsImp0aSI6ImIzOTg4MTc1ZGE4ZDRjOTQ4ODE4NDA1NWQ3YWFlYmYwIiwidXNlcl9pZCI6IjEifQ.wbpKKSr9F3vjr2dNuppuDVixgzu8JqIpjCsE4t2DLsQ
+
+### PASSWORD RESET
+POST http://127.0.0.1:8000/auth/users/reset_password/
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc2NzAzNTEyLCJpYXQiOjE3NzY3MDI2MTIsImp0aSI6ImIzOTg4MTc1ZGE4ZDRjOTQ4ODE4NDA1NWQ3YWFlYmYwIiwidXNlcl9pZCI6IjEifQ.wbpKKSr9F3vjr2dNuppuDVixgzu8JqIpjCsE4t2DLsQ
+
+{
+    "email": "myownde2018@gmail.com"
+}
+
+### PASSWORD RESET CONFIRMATION
+POST http://127.0.0.1:8000/auth/users/reset_password_confirm/
+Content-Type: application/json
+
+{
+    "uid": "MQ",
+    "token": "d7cde1-8f75514e2a06b753ed8524cda72b0a0a",
+    "new_password": "TESTpassword123",
+    "re_new_password": "TESTpassword123"
+}
+
+###################### PRODUCT ENDPOINTS ##################
+### Retrieve Products
+GET http://localhost:8000/api/products HTTP/1.1
+
+### Retrieve Single Product
+GET http://localhost:8000/api/products/c0740add-0d4c-4144-9215-ccad6bc4be95 HTTP/1.1
+
+### Create a Product
+POST http://localhost:8000/api/products/ HTTP/1.1
+Content-Type: application/json
+
+{
+  "title": "Cool Artwork Poster",
+  "artist_name": "Artist 1",
+  "goal": 5000,
+  "deadline": 30,
+  "color": "Blue",
+  "style": "Impressionist",
+  "composition": "Oil on canvas",
+  "price": 150.00,
+  "sizes": [
+    {"size": "S", "stock": 10},
+    {"size": "M", "stock": 15},
+    {"size": "L", "stock": 5}
+  ]
+}
+
+### Delete a product
+DELETE http://localhost:8000/api/products/c0740add-0d4c-4144-9215-ccad6bc4be95 HTTP/1.1
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc1NjM4MjIxLCJpYXQiOjE3NzU2MzczMjEsImp0aSI6ImNmZTlmYjg1YjM3YjQwYmE4YzU1MGNjMDVmZmIxMjBmIiwidXNlcl9pZCI6IjEifQ.z4Ag2jOOh5BA2bzKUr__0rQM3q8x6HfV83QtT6aIgYU
+
+
+###################### ARTIST ENDPOINTS ##################
+### Retrieve all artists
+GET http://localhost:8000/api/artists HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc1NjM4MjIxLCJpYXQiOjE3NzU2MzczMjEsImp0aSI6ImNmZTlmYjg1YjM3YjQwYmE4YzU1MGNjMDVmZmIxMjBmIiwidXNlcl9pZCI6IjEifQ.z4Ag2jOOh5BA2bzKUr__0rQM3q8x6HfV83QtT6aIgYU
+
+### Retrieve single artist
+GET http://localhost:8000/api/artists/c843f4d7-0774-4e32-a8fe-aedc5b34ce85 HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc1NjM4MjIxLCJpYXQiOjE3NzU2MzczMjEsImp0aSI6ImNmZTlmYjg1YjM3YjQwYmE4YzU1MGNjMDVmZmIxMjBmIiwidXNlcl9pZCI6IjEifQ.z4Ag2jOOh5BA2bzKUr__0rQM3q8x6HfV83QtT6aIgYU
+
+### Create an artist
+POST http://localhost:8000/api/artists/create/ HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc1NjM4MjIxLCJpYXQiOjE3NzU2MzczMjEsImp0aSI6ImNmZTlmYjg1YjM3YjQwYmE4YzU1MGNjMDVmZmIxMjBmIiwidXNlcl9pZCI6IjEifQ.z4Ag2jOOh5BA2bzKUr__0rQM3q8x6HfV83QtT6aIgYU
+
+{
+  "name": "Tested Artist",
+  "description": "This is coming from rest client",
+  "website": "https://www.example.com"
+} 
+
+### Update single artist
+PUT http://localhost:8000/api/artists/c843f4d7-0774-4e32-a8fe-aedc5b34ce85 HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc1NjM4MjIxLCJpYXQiOjE3NzU2MzczMjEsImp0aSI6ImNmZTlmYjg1YjM3YjQwYmE4YzU1MGNjMDVmZmIxMjBmIiwidXNlcl9pZCI6IjEifQ.z4Ag2jOOh5BA2bzKUr__0rQM3q8x6HfV83QtT6aIgYU
+
+{
+  "name": "CHANGED NAME!",
+  "description": "CHANGED DESCRIPTION"
+}
+
+### Partially update single artist
+PATCH  http://localhost:8000/api/artists/c843f4d7-0774-4e32-a8fe-aedc5b34ce85 HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc1NjM4MjIxLCJpYXQiOjE3NzU2MzczMjEsImp0aSI6ImNmZTlmYjg1YjM3YjQwYmE4YzU1MGNjMDVmZmIxMjBmIiwidXNlcl9pZCI6IjEifQ.z4Ag2jOOh5BA2bzKUr__0rQM3q8x6HfV83QtT6aIgYU
+
+{
+  "name": "REVERTED NAME!"
+}
+
+### Delete single artist
+DELETE  http://localhost:8000/api/artists/d07e22fc-b56f-4063-8d30-d3ebbc8be120 HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc1NjM4MjIxLCJpYXQiOjE3NzU2MzczMjEsImp0aSI6ImNmZTlmYjg1YjM3YjQwYmE4YzU1MGNjMDVmZmIxMjBmIiwidXNlcl9pZCI6IjEifQ.z4Ag2jOOh5BA2bzKUr__0rQM3q8x6HfV83QtT6aIgYU
+
+
+### CONTACT US
+POST http://localhost:8000/api/contact-us/ HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc1NjM4MjIxLCJpYXQiOjE3NzU2MzczMjEsImp0aSI6ImNmZTlmYjg1YjM3YjQwYmE4YzU1MGNjMDVmZmIxMjBmIiwidXNlcl9pZCI6IjEifQ.z4Ag2jOOh5BA2bzKUr__0rQM3q8x6HfV83QtT6aIgYU
+
+{
+  "email": "test@example.com",
+  "message": "I am just testing out."
+}
