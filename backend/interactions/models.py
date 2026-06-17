@@ -108,7 +108,6 @@ class UserInteraction(BaseModel):
         return f"{actor} → {self.interaction_type} → {self.product_id}"
 
 
-# ── Interaction weights ────────────────────────────────────────────────────────
 INTERACTION_WEIGHTS: dict[str, float] = {
     InteractionType.VIEW: 1.0,
     InteractionType.CLICK: 1.5,
