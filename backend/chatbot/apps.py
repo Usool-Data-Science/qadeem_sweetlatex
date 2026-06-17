@@ -2,4 +2,9 @@ from django.apps import AppConfig
 
 
 class ChatbotConfig(AppConfig):
-    name = 'chatbot'
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "chatbot"
+    verbose_name = "RAG Chatbot"
+
+    def ready(self):
+        import chatbot.signals  # noqa: F401

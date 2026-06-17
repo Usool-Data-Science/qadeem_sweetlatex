@@ -30,7 +30,7 @@ LOCAL_APPS = [
     "tasks.apps.TasksConfig",
     "interactions.apps.InteractionsConfig",
     "recommendations.apps.RecommendationsConfig",
-    "chatbot.apps.ChabotConfig",
+    "chatbot.apps.ChatbotConfig",
 ]
 
 THIRD_PARTY_APPS = [
