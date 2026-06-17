@@ -7,4 +7,7 @@ urlpatterns = [
     path("api/", include("djoser.urls")),
     path("api/", include("accounts.urls")),
     path("api/", include("core.urls")),
+    path("api/interactions/", include("interactions.urls")),
+    path("api/recommendations/", include("recommendations.urls")),
+    path("api/chatbot/", include("chatbot.urls")),
 ]

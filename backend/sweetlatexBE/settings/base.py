@@ -29,6 +29,8 @@ LOCAL_APPS = [
     "common.apps.CommonConfig",
     "tasks.apps.TasksConfig",
     "interactions.apps.InteractionsConfig",
+    "recommendations.apps.RecommendationsConfig",
+    "chatbot.apps.ChabotConfig",
 ]
 
 THIRD_PARTY_APPS = [
@@ -103,6 +105,9 @@ REST_FRAMEWORK = {
         "contact": "5/day",
         "product": "100/day",
         "cart": "30/minute",
+        "interaction_log": "120/min",
+        "recommendations": "30/min",
+        "chatbot": "20/min",
     },
 }
 
