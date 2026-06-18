@@ -2,16 +2,14 @@ import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 import { Mutex } from "async-mutex";
 import { logout, setAuth } from "../features/auth/authSlice";
 
-//  In prodction env, we will leave it blank so it can default to /api which is the backend service endpoint
 const BASE_API_URL = import.meta.env.VITE_API_BASE_URL || "";
-console.log(BASE_API_URL);
 
 const mutex = new Mutex();
+
 const baseQuery = fetchBaseQuery({
   baseUrl: BASE_API_URL + "/api",
   credentials: "include",
   prepareHeaders: (headers, { getState }) => {
-    // Get guestId from auth state
     const guestId = getState().auth.guestId;
     if (guestId) {
       headers.set("X-Session-ID", guestId);
@@ -21,36 +19,55 @@ const baseQuery = fetchBaseQuery({
 });
 
 const baseQueryWithReauth = async (args, api, extraOptions) => {
+  // ── Guard: never attempt refresh when user is already logged out ──────────
+  // This is the primary fix. If Redux state says the user is not
+  // authenticated, we skip the 401 → refresh → retry cycle entirely.
+  // The request still runs (some endpoints are public), but on 401 we
+  // dispatch logout and return the error cleanly without any retry loop.
+  const isAuthenticated = api.getState().auth.isAuthenticated;
+
   await mutex.waitForUnlock();
   let result = await baseQuery(args, api, extraOptions);
 
   if (result.error && result.error.status === 401) {
+    // If the user was already logged out, just dispatch logout to ensure
+    // Redux state is clean and return the error. No refresh attempt.
+    if (!isAuthenticated) {
+      api.dispatch(logout());
+      return result;
+    }
+
+    // User was authenticated — access token has expired. Attempt one refresh.
     if (!mutex.isLocked()) {
       const release = await mutex.acquire();
       try {
         const refreshResult = await baseQuery(
-          {
-            url: "refresh/",
-            method: "POST",
-          },
+          { url: "refresh/", method: "POST" },
           api,
           extraOptions,
         );
+
         if (refreshResult.data) {
+          // Refresh succeeded — update auth state and retry original request
           api.dispatch(setAuth());
-          // retry the initial query
           result = await baseQuery(args, api, extraOptions);
         } else {
-          // api.dispatch(logout());
+          // Refresh failed — session is truly expired. Log out cleanly.
+          // This dispatches logout() which clears localStorage and Redux state,
+          // preventing any further 401 → refresh loops.
+          api.dispatch(logout());
+          api.dispatch(apiSlice.util.resetApiState());
         }
       } finally {
         release();
       }
     } else {
+      // Another request is already refreshing — wait for it, then retry.
       await mutex.waitForUnlock();
       result = await baseQuery(args, api, extraOptions);
     }
   }
+
   return result;
 };
 

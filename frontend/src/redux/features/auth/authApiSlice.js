@@ -1,7 +1,11 @@
 import { apiSlice } from "../../services/apiSlice";
 import { setAuth, logout } from "./authSlice";
+
 const authApiSlice = apiSlice.injectEndpoints({
   endpoints: (builder) => ({
+    // ── Key fix: the `skip` option is controlled by the caller, not here.
+    // Components pass `skip: !isAuthenticated` so this query is never
+    // fired when the user is logged out, eliminating all spurious 401s.
     retrieveUser: builder.query({
       query: () => "/users/me/",
       providesTags: ["User"],
@@ -49,11 +53,12 @@ const authApiSlice = apiSlice.injectEndpoints({
       }),
       async onQueryStarted(arg, { dispatch, queryFulfilled }) {
         try {
-          await queryFulfilled; // wait for backend to clear cookie
-          dispatch(logout()); // then clear Redux state
-          dispatch(apiSlice.util.resetApiState());
+          await queryFulfilled;
         } catch (err) {
-          // even if backend fails, clear frontend state
+          // Intentional: even if backend call fails, we still clear state
+        } finally {
+          // Always clear frontend state — do not leave user in a
+          // half-logged-out state because the backend request failed
           dispatch(logout());
           dispatch(apiSlice.util.resetApiState());
         }
@@ -90,8 +95,6 @@ const authApiSlice = apiSlice.injectEndpoints({
         last_name,
         email,
         phone_number,
-        password,
-        old_password,
         street,
         city,
         state,
