@@ -1,24 +1,28 @@
 import { Navigate, useLocation } from "react-router-dom";
 import { useSelector } from "react-redux";
-import useAuth from "../hooks/use-auth";
+import { useRetrieveUserQuery } from "../redux/features/auth/authApiSlice";
 
 const PublicRoute = ({ children }) => {
   const { isAuthenticated } = useSelector((state) => state.auth);
-  const { user, loadingUser } = useAuth();
   const location = useLocation();
 
-  if (loadingUser) {
-    return <span className="loading loading-ring loading-lg"></span>;
+  const { data: user, isLoading } = useRetrieveUserQuery(undefined, {
+    skip: !isAuthenticated,
+  });
+
+  if (isAuthenticated && isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <span className="loading loading-ring loading-lg" />
+      </div>
+    );
   }
 
-  if (user) {
-    // Redirect to the intended page or default pages
-    const nextPage =
-      location.state?.next || (isAuthenticated ? "/home" : "/login");
+  if (isAuthenticated && user) {
+    const nextPage = location.state?.next || "/home";
     return <Navigate to={nextPage} replace />;
   }
 
-  // Allow unauthenticated users to access the route
   return children;
 };
 

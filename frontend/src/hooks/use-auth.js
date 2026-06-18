@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { toast } from "sonner";
 import {
   useLoginMutation,
@@ -18,11 +18,14 @@ export default function useAuth() {
 
   const [login] = useLoginMutation();
   const [logout] = useLogoutMutation();
+  const { isAuthenticated } = useSelector((state) => state.auth);
   const {
     data: user,
     isLoading: loadingUser,
     refetch,
-  } = useRetrieveUserQuery();
+  } = useRetrieveUserQuery(undefined, {
+    skip: !isAuthenticated,
+  });
   const adminUser = user?.is_staff;
 
   const navigate = useNavigate();
