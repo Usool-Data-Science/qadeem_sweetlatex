@@ -1,7 +1,12 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "sonner";
+import { Provider } from "react-redux";
+import store from "./redux/store";
+
 import PublicRoute from "./Components/PublicRoute";
 import PrivateRoute from "./Components/PrivateRoute";
+import ChatWidget from "./Components/ChatWidget";
+
 import Sale from "./Components/Sale";
 import LoginPage from "./Pages/LoginPage";
 import LandingPage from "./Pages/LandingPage";
@@ -16,37 +21,32 @@ import ArchivePage from "./Pages/ArchivePage";
 import ContactPage from "./Components/Contact";
 import AccountPage from "./Pages/AccountPage";
 import EditUserPage from "./Pages/EditUserPage";
-
-import { Provider } from "react-redux";
-import store from "./redux/store";
 import OrderDetailPage from "./Pages/OrderDetailPage";
 
 function App() {
   return (
-    <div
-      className="min-h-screen flex flex-col bg-opacity-85 text-white overflow-hidden"
-      style={{ backgroundColor: "#000" }}
-    >
-      {/* <Toaster richColors expand={true} position="top-right" /> */}
+    <Provider store={store}>
+      <div
+        className="min-h-screen flex flex-col bg-opacity-85 text-white overflow-hidden"
+        style={{ backgroundColor: "#000" }}
+      >
+        <Toaster
+          position="top-right"
+          expand={true}
+          richColors
+          toastOptions={{
+            classNames: {
+              toast: "bg-black border border-zinc-800 text-white shadow-2xl",
+              title: "text-white",
+              description: "text-zinc-400",
+              actionButton: "bg-white text-black hover:bg-zinc-200",
+              cancelButton: "bg-zinc-800 text-white hover:bg-zinc-700",
+            },
+          }}
+        />
 
-      <Toaster
-        position="top-right"
-        expand={true}
-        richColors
-        toastOptions={{
-          classNames: {
-            toast: "bg-black border border-zinc-800 text-white shadow-2xl",
-            title: "text-white",
-            description: "text-zinc-400",
-            actionButton: "bg-white text-black hover:bg-zinc-200",
-            cancelButton: "bg-zinc-800 text-white hover:bg-zinc-700",
-          },
-        }}
-      />
-      {/* <Header /> */}
-      <Provider store={store}>
         <Routes>
-          {/* Public Routes */}
+          {/* Public routes */}
           <Route
             path="/"
             element={
@@ -79,7 +79,6 @@ function App() {
               </PublicRoute>
             }
           />
-
           <Route
             path="/password-reset/:uid/:token"
             element={
@@ -89,7 +88,7 @@ function App() {
             }
           />
 
-          {/* Private Routes */}
+          {/* Private routes */}
           <Route
             path="/home"
             element={
@@ -98,7 +97,6 @@ function App() {
               </PrivateRoute>
             }
           />
-
           <Route
             path="/myaccount"
             element={
@@ -139,7 +137,6 @@ function App() {
               </PrivateRoute>
             }
           />
-
           <Route
             path="/orders/:orderId"
             element={
@@ -149,14 +146,17 @@ function App() {
             }
           />
 
-          {/* Fallback */}
+          {/* Open routes */}
           <Route path="/sales/:id" element={<Sale />} />
           <Route path="/collaboration" element={<ArchivePage />} />
           <Route path="/contact" element={<ContactPage />} />
           <Route path="*" element={<Navigate to="/home" />} />
         </Routes>
-      </Provider>
-    </div>
+
+        {/* ChatWidget renders on all pages — floats bottom-right */}
+        <ChatWidget />
+      </div>
+    </Provider>
   );
 }
 

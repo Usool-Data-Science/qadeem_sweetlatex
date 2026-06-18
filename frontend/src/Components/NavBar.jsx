@@ -2,6 +2,7 @@ import { IoPersonOutline } from "react-icons/io5";
 import { SlBag } from "react-icons/sl";
 import { Link, useLocation } from "react-router-dom";
 import { useState } from "react";
+import { useSelector } from "react-redux";
 import { useRetrieveUserQuery } from "../redux/features/auth/authApiSlice";
 import { useGetProductsQuery } from "../redux/features/product/productApiSlice";
 import useAuth from "../hooks/use-auth";
@@ -9,23 +10,34 @@ import { useGetCartQuery } from "../redux/features/cart/cartApiSlice";
 
 const NavBar = ({ search }) => {
   const [searchItem, setSearchItem] = useState("");
+  const { isAuthenticated } = useSelector((state) => state.auth);
 
   const { handleLogout } = useAuth();
-  const { data: user, isLoading: userLoading } = useRetrieveUserQuery();
-  const { data: userCart, isLoading: userCartLoading } = useGetCartQuery();
+
+  // Skip user and cart fetches when logged out — prevents 401 console noise
+  const { data: user } = useRetrieveUserQuery(undefined, {
+    skip: !isAuthenticated,
+  });
+  const { data: userCart } = useGetCartQuery(undefined, {
+    skip: !isAuthenticated,
+  });
+
   const adminUser = user?.is_staff;
 
-  const { data: products, isLoading: loadingProducts } = useGetProductsQuery();
+  const { data: products } = useGetProductsQuery();
   const [, setFilteredProducts] = useState(products);
-
   const location = useLocation();
 
   const handleSearch = (e) => {
     const value = e.target.value.toLowerCase();
     setSearchItem(value);
-    setFilteredProducts(
-      products.filter((product) => product.title.toLowerCase().includes(value)),
-    );
+    if (products?.products) {
+      setFilteredProducts(
+        products.products.filter((product) =>
+          product.title.toLowerCase().includes(value),
+        ),
+      );
+    }
   };
 
   const cartSize =
@@ -49,11 +61,11 @@ const NavBar = ({ search }) => {
           <Link to="/">
             <span
               className={`hover:underline hover:underline-offset-2
-                    ${
-                      location.pathname === "/" || location.pathname === "/home"
-                        ? "text-white underline underline-offset-4"
-                        : "text-white"
-                    }`}
+                ${
+                  location.pathname === "/" || location.pathname === "/home"
+                    ? "text-white underline underline-offset-4"
+                    : "text-white"
+                }`}
             >
               Presale
             </span>
@@ -62,11 +74,11 @@ const NavBar = ({ search }) => {
           <Link to="/collaboration">
             <span
               className={`hover:underline hover:underline-offset-2
-                    ${
-                      location.pathname === "/collaboration"
-                        ? "text-white underline underline-offset-4"
-                        : "text-white"
-                    }`}
+                ${
+                  location.pathname === "/collaboration"
+                    ? "text-white underline underline-offset-4"
+                    : "text-white"
+                }`}
             >
               Archive
             </span>
@@ -89,8 +101,8 @@ const NavBar = ({ search }) => {
 
       {/* RIGHT SECTION */}
       <div className="flex items-center">
-        {/* Cart */}
-        {!adminUser && (
+        {/* Cart — only for non-admin authenticated users */}
+        {isAuthenticated && !adminUser && (
           <a
             href="/me/carts"
             tabIndex={0}
@@ -99,7 +111,6 @@ const NavBar = ({ search }) => {
           >
             <div className="indicator">
               <span className="badge badge-sm indicator-item">{cartSize}</span>
-
               <SlBag className="w-5 h-5" />
             </div>
           </a>
@@ -124,11 +135,11 @@ const NavBar = ({ search }) => {
               </Link>
             </li>
 
-            {user ? (
+            {isAuthenticated ? (
               <li>
                 <button
                   onClick={handleLogout}
-                  className="font-arvo text-left text-white  hover:bg-gray-800 rounded-md"
+                  className="font-arvo text-left text-white hover:bg-gray-800 rounded-md"
                 >
                   Logout
                 </button>
@@ -137,7 +148,7 @@ const NavBar = ({ search }) => {
               <li>
                 <Link
                   to="/login"
-                  className="font-arvo text-white  hover:bg-gray-800 rounded-md"
+                  className="font-arvo text-white hover:bg-gray-800 rounded-md"
                 >
                   Login
                 </Link>
