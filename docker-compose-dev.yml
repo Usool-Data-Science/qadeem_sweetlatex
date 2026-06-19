@@ -22,6 +22,8 @@ services:
     image: redis:7-alpine
     container_name: redis
     restart: always
+    # Limit Redis to 256 MB — prevents runaway memory if Celery queues back up
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     networks:
       - mynet
     healthcheck:
@@ -50,6 +52,9 @@ services:
       - sqlite_data:/app/sqlite
       - static_files:/app/staticfiles
       - media_files:/app/media
+      # ML artefact volumes — persisted across container rebuilds
+      - faiss_index:/app/faiss_index
+      - ml_models:/app/ml_models
     networks:
       - mynet
     healthcheck:
@@ -59,9 +64,10 @@ services:
       retries: 3
       start_period: 40s
 
+  # ── Default Celery worker — handles non-ML tasks (email, Stripe, stock) ──
   celery:
     build: ./backend
-    command: celery -A sweetlatexBE worker -l INFO
+    command: celery -A sweetlatexBE worker -l INFO -Q celery -c 4
     container_name: celery
     restart: always
     depends_on:
@@ -84,9 +90,41 @@ services:
     networks:
       - mynet
 
+  # ── ML Celery worker — handles CLIP embedding, FAISS rebuild, BPR/SASRec ──
+  # Runs on a dedicated queue so heavy ML jobs never block email/Stripe tasks.
+  # Concurrency 1 keeps memory predictable on dev machines.
+  celery_ml:
+    build: ./backend
+    command: celery -A sweetlatexBE worker -l INFO -Q ml -c 1
+    container_name: celery_ml
+    restart: always
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ./backend/.docker-envs/.env.dev
+    environment:
+      - DJANGO_SETTINGS_MODULE=sweetlatexBE.settings.dev
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+      # ML worker needs read/write access to the same artefact volumes
+      - faiss_index:/app/faiss_index
+      - ml_models:/app/ml_models
+    networks:
+      - mynet
+    # Soft memory limit — container is restarted if ML job leaks memory
+    mem_limit: 4g
+    memswap_limit: 4g
+
   celery_beat:
     build: ./backend
-    command: celery -A sweetlatexBE beat -l INFO
+    command: >
+      celery -A sweetlatexBE beat -l INFO
       --scheduler django_celery_beat.schedulers:DatabaseScheduler
     container_name: celery_beat
     restart: always
@@ -130,6 +168,9 @@ volumes:
   static_files:
   media_files:
   sqlite_data:
+  # NEW: persisted ML artefact volumes
+  faiss_index: # FAISS ANN index for visual similarity search
+  ml_models: # BPR and SASRec checkpoints
 
 networks:
   mynet:

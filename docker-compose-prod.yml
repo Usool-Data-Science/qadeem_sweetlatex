@@ -22,6 +22,7 @@ services:
     image: redis:7-alpine
     container_name: redis
     restart: always
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     networks:
       - mynet
     healthcheck:
@@ -36,7 +37,7 @@ services:
     command: gunicorn -c gunicorn_config.py sweetlatexBE.wsgi
     restart: always
     expose:
-      - "8000" # no longer need ports since caddy/nginx handle it
+      - "8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,6 +50,9 @@ services:
     volumes:
       - static_files:/app/staticfiles
       - media_files:/app/media
+      # ML artefact volumes — persisted across container rebuilds
+      - faiss_index:/app/faiss_index
+      - ml_models:/app/ml_models
     networks:
       - mynet
     healthcheck:
@@ -58,9 +62,10 @@ services:
       retries: 3
       start_period: 40s
 
+  # ── Default Celery worker — email, Stripe webhooks, stock release ─────────
   celery:
     build: ./backend
-    command: celery -A sweetlatexBE worker -l INFO
+    command: celery -A sweetlatexBE worker -l INFO -Q celery -c 4
     container_name: celery
     restart: always
     depends_on:
@@ -82,9 +87,39 @@ services:
     networks:
       - mynet
 
+  # ── ML Celery worker — CLIP, FAISS, BPR, SASRec, RAG indexing ────────────
+  # Isolated on the `ml` queue. Concurrency 2 on prod (more RAM available).
+  # mem_limit prevents a runaway CLIP/SASRec job from OOM-killing the host.
+  celery_ml:
+    build: ./backend
+    command: celery -A sweetlatexBE worker -l INFO -Q ml -c 2
+    container_name: celery_ml
+    restart: always
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ./backend/.docker-envs/.env.prod
+    environment:
+      - DJANGO_SETTINGS_MODULE=sweetlatexBE.settings.prod
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+      - faiss_index:/app/faiss_index
+      - ml_models:/app/ml_models
+    networks:
+      - mynet
+    mem_limit: 6g
+    memswap_limit: 6g
+
   celery_beat:
     build: ./backend
-    command: celery -A sweetlatexBE beat -l INFO
+    command: >
+      celery -A sweetlatexBE beat -l INFO
       --scheduler django_celery_beat.schedulers:DatabaseScheduler
     container_name: celery_beat
     restart: always
@@ -112,7 +147,7 @@ services:
     restart: unless-stopped
     container_name: frontend
     expose:
-      - "80" # no longer need ports since caddy handles it
+      - "80"
     depends_on:
       api:
         condition: service_healthy
@@ -146,6 +181,9 @@ volumes:
   media_files:
   caddy_data:
   caddy_config:
+  # NEW: persisted ML artefact volumes
+  faiss_index: # FAISS ANN index rebuilt nightly by Celery Beat
+  ml_models: # BPR (.pkl) and SASRec (.pt) checkpoints
 
 networks:
   mynet:

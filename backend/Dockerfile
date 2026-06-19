@@ -1,26 +1,54 @@
-FROM python:3.12-slim
-
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
+# ── Stage 1: Python dependency builder ───────────────────────────────────────
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    netcat-openbsd \
-    default-mysql-client \
-    curl \
+# System packages needed to compile some ML wheels (faiss, tokenizers)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    g++ \
+    libpq-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt /app/
+COPY requirements.txt .
 
-RUN pip install --upgrade pip
-RUN pip install --no-cache-dir -r requirements.txt
+# Install PyTorch CPU-only first (much smaller than CUDA build — ~800 MB vs ~3 GB)
+# Pin the index URL so Docker layer cache is stable
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir \
+        torch==2.3.1 \
+        --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir -r requirements.txt
 
-COPY . /app/
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+# ── Stage 2: Lean runtime image ───────────────────────────────────────────────
+FROM python:3.12-slim AS runtime
+
+WORKDIR /app
+
+# Runtime system deps only (libpq for psycopg2, curl for healthcheck)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed packages from builder — keeps final image lean
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy application source
+COPY . .
+
+# Pre-create ML artefact directories so volume mounts have the right paths
+# even before the nightly Celery tasks have run for the first time
+RUN mkdir -p /app/faiss_index /app/ml_models
+
+# Collect static files at build time (avoids startup delay)
+RUN python manage.py collectstatic --noinput --settings=sweetlatexBE.settings.prod 2>/dev/null || true
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 8000
+
+ENTRYPOINT ["/entrypoint.sh"]
