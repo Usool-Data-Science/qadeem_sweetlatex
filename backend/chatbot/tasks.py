@@ -4,7 +4,7 @@ chatbot/tasks.py
 Celery tasks for the RAG pipeline:
 
   index_product_chunks  — triggered by Product post_save signal
-  rebuild_rag_index     — nightly Celery Beat job (full ChromaDB rebuild)
+  rebuild_rag_index     — nightly Celery Beat job (full Pinecone rebuild)
   run_ragas_evaluation  — offline thesis evaluation task
 """
 
@@ -15,7 +15,6 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-# Character window for each chunk with 64-char overlap
 CHUNK_SIZE    = 1500
 CHUNK_OVERLAP = 200
 
@@ -33,15 +32,11 @@ def _chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP)
 
 
 def _build_product_text(product) -> list[tuple[str, str]]:
-    """
-    Build (text, source_type) pairs for a product.
-    Returns multiple chunks per product covering different aspects.
-    """
+    """Build (text, source_type) pairs for a product."""
     from chatbot.models import RAGDocument
 
     chunks = []
 
-    # Chunk 1: Core metadata
     meta = (
         f"Product: {product.title}\n"
         f"Artist: {product.artist.name}\n"
@@ -55,7 +50,6 @@ def _build_product_text(product) -> list[tuple[str, str]]:
     )
     chunks.append((meta, RAGDocument.SourceType.PRODUCT_METADATA))
 
-    # Chunk 2+: Split composition/description if long
     if len(product.composition) > 300:
         for part in _chunk_text(product.composition):
             chunks.append((
@@ -64,6 +58,12 @@ def _build_product_text(product) -> list[tuple[str, str]]:
             ))
 
     return chunks
+
+
+def _get_pinecone_index():
+    """Get the Pinecone index — imported here to avoid circular imports."""
+    from ml.rag_pipeline import _get_pinecone_index as _get_index
+    return _get_index()
 
 
 @shared_task(
@@ -76,25 +76,30 @@ def _build_product_text(product) -> list[tuple[str, str]]:
 def index_product_chunks(self, product_id: str) -> dict:
     """
     Generate RAG chunks for a single product and upsert into:
-      1. RAGDocument table (for BM25 retrieval)
-      2. ChromaDB (for dense retrieval)
+      1. RAGDocument table  — for BM25 sparse retrieval
+      2. Pinecone           — for dense vector retrieval
+
+    Upsert semantics: safe to re-run; existing vectors are overwritten.
     """
     try:
         from sentence_transformers import SentenceTransformer
 
         from chatbot.models import RAGDocument
         from core.models import Product
-        from ml.rag_pipeline import _get_chroma_collection
 
-        product = Product.objects.select_related("artist").prefetch_related("sizes").get(
-            product_id=product_id
+        product = (
+            Product.objects
+            .select_related("artist")
+            .prefetch_related("sizes")
+            .get(product_id=product_id)
         )
 
-        model = SentenceTransformer("all-MiniLM-L6-v2")
-        collection = _get_chroma_collection()
+        model      = SentenceTransformer("all-MiniLM-L6-v2")
+        pc_index   = _get_pinecone_index()
         chunk_pairs = _build_product_text(product)
 
         created_count = updated_count = 0
+        pinecone_vectors = []
 
         for idx, (text, source_type) in enumerate(chunk_pairs):
             vector = model.encode(text, normalize_embeddings=True).tolist()
@@ -117,27 +122,40 @@ def index_product_chunks(self, product_id: str) -> dict:
             else:
                 updated_count += 1
 
-            # Upsert into ChromaDB
-            if collection is not None:
-                doc_id = f"{product_id}_{source_type}_{idx}"
-                collection.upsert(
-                    ids=[doc_id],
-                    documents=[text],
-                    embeddings=[vector],
-                    metadatas=[{
-                        "doc_id":      str(obj.id),
-                        "product_id":  str(product_id),
-                        "source_type": source_type,
-                        "chunk_index": idx,
-                        "product_title": product.title,
-                    }],
-                )
+            # Build Pinecone upsert payload
+            # ID format: <product_id>_<source_type>_<chunk_index>
+            pinecone_id = f"{product_id}_{source_type}_{idx}"
+            pinecone_vectors.append({
+                "id":     pinecone_id,
+                "values": vector,
+                "metadata": {
+                    "doc_id":        str(obj.id),
+                    "product_id":    str(product_id),
+                    "source_type":   source_type,
+                    "chunk_index":   idx,
+                    "product_title": product.title,
+                    # Store the raw text in metadata so dense_retrieve
+                    # can return it without a secondary DB lookup
+                    "text":          text[:1000],  # Pinecone metadata max ~40KB per vector
+                },
+            })
+
+        # Batch upsert to Pinecone (max 100 vectors per request)
+        if pc_index and pinecone_vectors:
+            batch_size = 100
+            for i in range(0, len(pinecone_vectors), batch_size):
+                pc_index.upsert(vectors=pinecone_vectors[i:i + batch_size])
 
         logger.info(
-            "RAG indexed product %s: %d created, %d updated",
-            product_id, created_count, updated_count,
+            "RAG indexed product %s: %d created, %d updated, %d Pinecone vectors",
+            product_id, created_count, updated_count, len(pinecone_vectors),
         )
-        return {"product_id": product_id, "created": created_count, "updated": updated_count}
+        return {
+            "product_id": product_id,
+            "created":    created_count,
+            "updated":    updated_count,
+            "pinecone":   len(pinecone_vectors),
+        }
 
     except Exception as exc:
         logger.error("RAG indexing failed for product %s: %s", product_id, exc)
@@ -150,35 +168,47 @@ def index_product_chunks(self, product_id: str) -> dict:
 )
 def rebuild_rag_index() -> dict:
     """
-    Nightly full rebuild of the RAG index.
-    Queues index_product_chunks for every active product.
-    Also rebuilds the ChromaDB collection from scratch to remove stale entries.
-    Runs at 4 AM UTC via Celery Beat.
+    Nightly full rebuild of the RAG index. Runs at 4 AM UTC via Celery Beat.
+
+    Steps:
+      1. Delete and recreate the Pinecone index (removes stale vectors)
+      2. Reset RAGDocument.is_indexed flags in PostgreSQL
+      3. Queue index_product_chunks for every product
     """
-    import chromadb
     from django.conf import settings
+    from pinecone import Pinecone, ServerlessSpec
 
     from core.models import Product
 
-    logger.info("Starting full RAG index rebuild...")
+    logger.info("Starting full RAG index rebuild (Pinecone)...")
 
-    # Wipe and recreate ChromaDB collection
+    # ── Recreate Pinecone index ───────────────────────────────────────────────
     try:
-        persist_dir = getattr(settings, "CHROMA_PERSIST_DIR", "/app/chroma_db")
-        client = chromadb.PersistentClient(path=persist_dir)
-        try:
-            client.delete_collection("fashion_rag")
-        except Exception:
-            pass
-        client.get_or_create_collection(
-            name="fashion_rag",
-            metadata={"hnsw:space": "cosine"},
-        )
-        logger.info("ChromaDB collection reset.")
-    except Exception as exc:
-        logger.error("ChromaDB reset failed: %s", exc)
+        pc         = Pinecone(api_key=settings.PINECONE_API_KEY)
+        index_name = getattr(settings, "PINECONE_INDEX_NAME", "sweetlatex-rag")
+        dim        = int(getattr(settings, "PINECONE_DIMENSION", 384))
 
-    # Reset is_indexed flag so all docs get reprocessed
+        existing = [idx.name for idx in pc.list_indexes()]
+        if index_name in existing:
+            pc.delete_index(index_name)
+            logger.info("Pinecone index '%s' deleted.", index_name)
+
+        pc.create_index(
+            name=index_name,
+            dimension=dim,
+            metric="cosine",
+            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+        )
+        logger.info("Pinecone index '%s' recreated (dim=%d).", index_name, dim)
+
+        # Reset singleton so workers re-connect to the new index
+        import ml.rag_pipeline as rag
+        rag._pinecone_index = None
+
+    except Exception as exc:
+        logger.error("Pinecone index reset failed: %s", exc)
+
+    # ── Reset DB flags and re-queue ───────────────────────────────────────────
     from chatbot.models import RAGDocument
     RAGDocument.objects.all().update(is_indexed=False)
 
@@ -200,9 +230,6 @@ def run_ragas_evaluation(session_ids: list[str] | None = None) -> dict:
 
     Computes faithfulness, answer_relevance, and context_precision
     for ChatMessage rows that have retrieved_chunks but no RAGAS scores yet.
-
-    Can be run on specific session_ids or all unevaluated messages.
-    Called manually during thesis evaluation: not scheduled by Beat.
     """
     try:
         from datasets import Dataset
@@ -225,13 +252,19 @@ def run_ragas_evaluation(session_ids: list[str] | None = None) -> dict:
             return {"evaluated": 0, "reason": "no_unevaluated_messages"}
 
         data = {
-            "question":  [m.session.messages.filter(role="user").order_by("-created_at").values_list("content", flat=True).first() or "" for m in messages],
-            "answer":    [m.content for m in messages],
-            "contexts":  [[c["text"] for c in m.retrieved_chunks] for m in messages],
+            "question": [
+                m.session.messages.filter(role="user")
+                .order_by("-created_at")
+                .values_list("content", flat=True)
+                .first() or ""
+                for m in messages
+            ],
+            "answer":   [m.content for m in messages],
+            "contexts": [[c["text"] for c in m.retrieved_chunks] for m in messages],
         }
 
         dataset = Dataset.from_dict(data)
-        result = evaluate(
+        result  = evaluate(
             dataset,
             metrics=[faithfulness, answer_relevancy, context_precision],
         )
@@ -239,9 +272,9 @@ def run_ragas_evaluation(session_ids: list[str] | None = None) -> dict:
         scores_df = result.to_pandas()
 
         for i, msg in enumerate(messages):
-            msg.faithfulness       = float(scores_df.iloc[i].get("faithfulness", 0) or 0)
-            msg.answer_relevance   = float(scores_df.iloc[i].get("answer_relevancy", 0) or 0)
-            msg.context_precision  = float(scores_df.iloc[i].get("context_precision", 0) or 0)
+            msg.faithfulness      = float(scores_df.iloc[i].get("faithfulness", 0) or 0)
+            msg.answer_relevance  = float(scores_df.iloc[i].get("answer_relevancy", 0) or 0)
+            msg.context_precision = float(scores_df.iloc[i].get("context_precision", 0) or 0)
 
         ChatMessage.objects.bulk_update(
             messages,
@@ -254,15 +287,16 @@ def run_ragas_evaluation(session_ids: list[str] | None = None) -> dict:
         avg_context_precision = scores_df["context_precision"].mean()
 
         logger.info(
-            "RAGAS evaluation complete: faithfulness=%.3f, answer_relevance=%.3f, context_precision=%.3f",
+            "RAGAS evaluation complete: faithfulness=%.3f, "
+            "answer_relevance=%.3f, context_precision=%.3f",
             avg_faithfulness, avg_answer_relevance, avg_context_precision,
         )
 
         return {
-            "evaluated":          len(messages),
-            "faithfulness":        round(avg_faithfulness, 4),
-            "answer_relevance":    round(avg_answer_relevance, 4),
-            "context_precision":   round(avg_context_precision, 4),
+            "evaluated":         len(messages),
+            "faithfulness":       round(avg_faithfulness, 4),
+            "answer_relevance":   round(avg_answer_relevance, 4),
+            "context_precision":  round(avg_context_precision, 4),
         }
 
     except Exception as exc:

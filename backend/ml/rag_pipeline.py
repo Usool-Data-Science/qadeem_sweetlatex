@@ -60,18 +60,32 @@ CURRENT USER CART:
 def _get_llm_client():
     """
     Returns a configured LLM client based on LLM_PROVIDER env var.
-    Supports: groq | openai | ollama
-    Adding a new provider = adding one elif block here.
-    """
-    provider = getattr(settings, "LLM_PROVIDER", "groq").lower()
 
-    if provider == "groq":
-        from groq import Groq
-        return Groq(api_key=settings.GROQ_API_KEY), provider
+    Supported providers:
+      gemini  — Google Gemini via google-generativeai SDK (DEFAULT)
+      openai  — OpenAI GPT models
+      groq    — Groq-hosted Llama models
+      ollama  — Local Ollama instance (OpenAI-compatible API)
+
+    For gemini, we return (None, "gemini") because the Gemini SDK
+    does not follow the OpenAI client shape — it is handled separately
+    inside generate().
+    """
+    provider = getattr(settings, "LLM_PROVIDER", "gemini").lower()
+
+    if provider == "gemini":
+        # Client is initialised inside generate() using google.generativeai.
+        # We return None here as a sentinel — generate() checks for "gemini"
+        # and takes a different code path.
+        return None, "gemini"
 
     elif provider == "openai":
         from openai import OpenAI
         return OpenAI(api_key=settings.OPENAI_API_KEY), provider
+
+    elif provider == "groq":
+        from groq import Groq
+        return Groq(api_key=settings.GROQ_API_KEY), provider
 
     elif provider == "ollama":
         from openai import OpenAI  # Ollama exposes an OpenAI-compatible API
@@ -81,7 +95,10 @@ def _get_llm_client():
         ), provider
 
     else:
-        raise ValueError(f"Unknown LLM_PROVIDER: {provider}. Use groq | openai | ollama.")
+        raise ValueError(
+            f"Unknown LLM_PROVIDER: '{provider}'. "
+            "Use one of: gemini | openai | groq | ollama"
+        )
 
 
 def _get_model_name(provider: str) -> str:
@@ -89,11 +106,12 @@ def _get_model_name(provider: str) -> str:
     if configured:
         return configured
     defaults = {
-        "groq":   "llama-3.1-8b-instant",
+        "gemini": "gemini-1.5-flash",
         "openai": "gpt-4o-mini",
+        "groq":   "llama-3.1-8b-instant",
         "ollama": "llama3.1:8b",
     }
-    return defaults.get(provider, "llama-3.1-8b-instant")
+    return defaults.get(provider, "gemini-1.5-flash")
 
 
 # ── BM25 retrieval ────────────────────────────────────────────────────────────
@@ -145,75 +163,90 @@ def _bm25_retrieve(query: str, top_k: int = BM25_TOP_K) -> list[dict]:
 
 # ── Dense vector retrieval via ChromaDB ───────────────────────────────────────
 
-_chroma_client = None
-_chroma_collection = None
+_pinecone_index = None
 
-
-def _get_chroma_collection():
-    global _chroma_client, _chroma_collection
-    if _chroma_collection is not None:
-        return _chroma_collection
+def _get_pinecone_index():
+    """
+    Lazy-initialise the Pinecone index singleton.
+    Called once per worker process on the first dense retrieval request.
+    Auto-creates the index if it does not exist yet in your Pinecone project.
+    """
+    global _pinecone_index
+    if _pinecone_index is not None:
+        return _pinecone_index
 
     try:
-        import chromadb
-        from chromadb.config import Settings as ChromaSettings
+        from pinecone import Pinecone, ServerlessSpec
 
-        persist_dir = getattr(settings, "CHROMA_PERSIST_DIR", "/app/chroma_db")
-        _chroma_client = chromadb.PersistentClient(path=persist_dir)
-        _chroma_collection = _chroma_client.get_or_create_collection(
-            name="fashion_rag",
-            metadata={"hnsw:space": "cosine"},
-        )
+        pc = Pinecone(api_key=settings.PINECONE_API_KEY)
+        index_name = getattr(settings, "PINECONE_INDEX_NAME", "sweetlatex-rag")
+
+        # Create the index if it does not exist in your Pinecone project
+        existing = [idx.name for idx in pc.list_indexes()]
+        if index_name not in existing:
+            dim = int(getattr(settings, "PINECONE_DIMENSION", 384))
+            pc.create_index(
+                name=index_name,
+                dimension=dim,
+                metric="cosine",
+                spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+            )
+            logger.info("Pinecone index '%s' created (dim=%d)", index_name, dim)
+
+        _pinecone_index = pc.Index(index_name)
+        stats = _pinecone_index.describe_index_stats()
         logger.info(
-            "ChromaDB collection loaded: %d documents",
-            _chroma_collection.count(),
+            "Pinecone index '%s' ready: %d vectors",
+            index_name,
+            stats.get("total_vector_count", 0),
         )
-        return _chroma_collection
+        return _pinecone_index
+
     except Exception as exc:
-        logger.error("ChromaDB init failed: %s", exc)
+        logger.error("Pinecone init failed: %s", exc)
         return None
 
 
 def _dense_retrieve(query: str, top_k: int = DENSE_TOP_K) -> list[dict]:
     """
-    Dense retrieval using sentence-transformer embeddings stored in ChromaDB.
+    Dense retrieval using sentence-transformer embeddings stored in Pinecone.
+
+    Query flow:
+      1. Encode query with all-MiniLM-L6-v2 (384-d, L2-normalised)
+      2. Query Pinecone for top_k nearest vectors by cosine similarity
+      3. Return results with text + metadata for RRF fusion
     """
     try:
         from sentence_transformers import SentenceTransformer
 
-        collection = _get_chroma_collection()
-        if collection is None or collection.count() == 0:
+        index = _get_pinecone_index()
+        if index is None:
             return []
 
         model = SentenceTransformer("all-MiniLM-L6-v2")
         query_vector = model.encode(query, normalize_embeddings=True).tolist()
 
-        results = collection.query(
-            query_embeddings=[query_vector],
-            n_results=min(top_k, collection.count()),
-            include=["documents", "metadatas", "distances"],
+        response = index.query(
+            vector=query_vector,
+            top_k=top_k,
+            include_metadata=True,
         )
 
         chunks = []
-        for i, (doc, meta, dist) in enumerate(
-            zip(
-                results["documents"][0],
-                results["metadatas"][0],
-                results["distances"][0],
-            )
-        ):
+        for i, match in enumerate(response.get("matches", [])):
+            meta = match.get("metadata", {})
             chunks.append({
-                "id": meta.get("doc_id", ""),
-                "text": doc,
-                "product_id": meta.get("product_id"),
+                "id":          meta.get("doc_id", match["id"]),
+                "text":        meta.get("text", ""),
+                "product_id":  meta.get("product_id"),
                 "source_type": meta.get("source_type", ""),
-                "dense_score": float(1 - dist),  # cosine distance → similarity
-                "rank": i,
+                "dense_score": float(match.get("score", 0)),
+                "rank":        i,
             })
         return chunks
 
     except Exception as exc:
-        logger.error("Dense retrieval failed: %s", exc)
+        logger.error("Pinecone dense retrieval failed: %s", exc)
         return []
 
 
@@ -321,22 +354,18 @@ def generate(
     conversation_history: list[dict],
     user=None,
     stream: bool = True,
-) -> Generator[str, None, dict]:
+):
     """
     Generate a response from the LLM using retrieved context.
 
-    Args:
-        query:                 The user's current message
-        context_chunks:        Retrieved and reranked chunks
-        conversation_history:  Previous (role, content) turns in this session
-        user:                  Django User object (for cart context)
-        stream:                If True, yields tokens as they arrive (SSE)
+    For Gemini: uses google.generativeai SDK with start_chat() + send_message().
+    For all others: uses the OpenAI chat completions shape (unchanged).
 
     Yields:
         str tokens when stream=True
 
     Returns:
-        metadata dict: {prompt_tokens, completion_tokens, latency_ms, product_ids}
+        metadata dict: {prompt_tokens, completion_tokens, latency_ms, product_ids, provider, model}
     """
     context_text = "\n\n---\n\n".join(
         f"[{c.get('source_type', 'product')}]\n{c['text']}"
@@ -348,12 +377,6 @@ def generate(
         cart_summary=cart_summary,
     )
 
-    messages = [{"role": "system", "content": system_content}]
-    # Include last 6 turns of history to stay within context window
-    for turn in conversation_history[-6:]:
-        messages.append({"role": turn["role"], "content": turn["content"]})
-    messages.append({"role": "user", "content": query})
-
     client, provider = _get_llm_client()
     model_name = _get_model_name(provider)
 
@@ -362,41 +385,91 @@ def generate(
     full_response = ""
 
     try:
-        if stream:
-            response_stream = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                max_tokens=1000,
-                temperature=0.4,
-                stream=True,
-            )
-            for chunk in response_stream:
-                delta = chunk.choices[0].delta.content or ""
-                full_response += delta
-                yield delta
+        # ── Gemini path ───────────────────────────────────────────────────────
+        if provider == "gemini":
+            import google.generativeai as genai
 
-        else:
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                max_tokens=1000,
-                temperature=0.4,
-                stream=False,
+            genai.configure(api_key=settings.GOOGLE_API_KEY)
+            gemini_model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=system_content,
             )
-            full_response = response.choices[0].message.content or ""
-            prompt_tokens     = response.usage.prompt_tokens
-            completion_tokens = response.usage.completion_tokens
-            yield full_response
+
+            # Gemini uses "model" instead of "assistant" for the AI role
+            gemini_history = []
+            for turn in conversation_history[-6:]:
+                gemini_role = "model" if turn["role"] == "assistant" else "user"
+                gemini_history.append({
+                    "role":  gemini_role,
+                    "parts": [turn["content"]],
+                })
+
+            chat = gemini_model.start_chat(history=gemini_history)
+
+            if stream:
+                response = chat.send_message(query, stream=True)
+                for chunk in response:
+                    delta = chunk.text or ""
+                    full_response += delta
+                    yield delta
+                try:
+                    prompt_tokens     = response.usage_metadata.prompt_token_count
+                    completion_tokens = response.usage_metadata.candidates_token_count
+                except Exception:
+                    pass
+            else:
+                response = chat.send_message(query, stream=False)
+                full_response = response.text or ""
+                try:
+                    prompt_tokens     = response.usage_metadata.prompt_token_count
+                    completion_tokens = response.usage_metadata.candidates_token_count
+                except Exception:
+                    pass
+                yield full_response
+
+        # ── OpenAI-compatible path (openai / groq / ollama) ──────────────────
+        else:
+            messages = [{"role": "system", "content": system_content}]
+            for turn in conversation_history[-6:]:
+                messages.append({"role": turn["role"], "content": turn["content"]})
+            messages.append({"role": "user", "content": query})
+
+            if stream:
+                response_stream = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    max_tokens=1000,
+                    temperature=0.4,
+                    stream=True,
+                )
+                for chunk in response_stream:
+                    delta = chunk.choices[0].delta.content or ""
+                    full_response += delta
+                    yield delta
+            else:
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    max_tokens=1000,
+                    temperature=0.4,
+                    stream=False,
+                )
+                full_response     = response.choices[0].message.content or ""
+                prompt_tokens     = response.usage.prompt_tokens
+                completion_tokens = response.usage.completion_tokens
+                yield full_response
 
     except Exception as exc:
         logger.error("LLM generation failed (%s / %s): %s", provider, model_name, exc)
-        error_msg = "I'm sorry, I'm having trouble connecting right now. Please try again in a moment."
+        error_msg = (
+            "I'm sorry, I'm having trouble connecting right now. "
+            "Please try again in a moment."
+        )
         yield error_msg
         full_response = error_msg
 
     latency_ms = int((time.time() - start) * 1000)
 
-    # Extract product IDs mentioned in the response from context
     product_ids = list({
         c["product_id"]
         for c in context_chunks
