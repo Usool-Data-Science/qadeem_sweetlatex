@@ -22,18 +22,17 @@ References:
 
 import logging
 import time
-from typing import Generator, Optional
 
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-DENSE_TOP_K    = 20   # candidates from vector retrieval
-BM25_TOP_K     = 20   # candidates from BM25 retrieval
-RERANK_TOP_N   = 10   # candidates passed to cross-encoder
-FINAL_CONTEXT  = 5    # chunks injected into the LLM prompt
-RRF_K          = 60   # RRF constant (standard value)
+DENSE_TOP_K = 20  # candidates from vector retrieval
+BM25_TOP_K = 20  # candidates from BM25 retrieval
+RERANK_TOP_N = 10  # candidates passed to cross-encoder
+FINAL_CONTEXT = 5  # chunks injected into the LLM prompt
+RRF_K = 60  # RRF constant (standard value)
 
 SYSTEM_PROMPT = """You are a helpful and knowledgeable fashion assistant for SweetLatex, \
 a fashion e-commerce store. You help customers find products, answer questions about \
@@ -56,6 +55,7 @@ CURRENT USER CART:
 
 
 # ── LLM provider factory ──────────────────────────────────────────────────────
+
 
 def _get_llm_client():
     """
@@ -81,14 +81,17 @@ def _get_llm_client():
 
     elif provider == "openai":
         from openai import OpenAI
+
         return OpenAI(api_key=settings.OPENAI_API_KEY), provider
 
     elif provider == "groq":
         from groq import Groq
+
         return Groq(api_key=settings.GROQ_API_KEY), provider
 
     elif provider == "ollama":
         from openai import OpenAI  # Ollama exposes an OpenAI-compatible API
+
         return OpenAI(
             base_url=getattr(settings, "OLLAMA_BASE_URL", "http://ollama:11434/v1"),
             api_key="ollama",
@@ -108,13 +111,14 @@ def _get_model_name(provider: str) -> str:
     defaults = {
         "gemini": "gemini-1.5-flash",
         "openai": "gpt-4o-mini",
-        "groq":   "llama-3.1-8b-instant",
+        "groq": "llama-3.1-8b-instant",
         "ollama": "llama3.1:8b",
     }
     return defaults.get(provider, "gemini-1.5-flash")
 
 
 # ── BM25 retrieval ────────────────────────────────────────────────────────────
+
 
 def _bm25_retrieve(query: str, top_k: int = BM25_TOP_K) -> list[dict]:
     """
@@ -123,14 +127,13 @@ def _bm25_retrieve(query: str, top_k: int = BM25_TOP_K) -> list[dict]:
     Fast enough for < 50k chunks; for larger corpora switch to Elasticsearch.
     """
     try:
+        from chatbot.models import RAGDocument
         from rank_bm25 import BM25Okapi
 
-        from chatbot.models import RAGDocument
-
         docs = list(
-            RAGDocument.objects
-            .filter(is_indexed=True)
-            .values("id", "text", "product_id", "source_type")
+            RAGDocument.objects.filter(is_indexed=True).values(
+                "id", "text", "product_id", "source_type"
+            )
         )
         if not docs:
             return []
@@ -164,6 +167,7 @@ def _bm25_retrieve(query: str, top_k: int = BM25_TOP_K) -> list[dict]:
 # ── Dense vector retrieval via ChromaDB ───────────────────────────────────────
 
 _pinecone_index = None
+
 
 def _get_pinecone_index():
     """
@@ -235,14 +239,16 @@ def _dense_retrieve(query: str, top_k: int = DENSE_TOP_K) -> list[dict]:
         chunks = []
         for i, match in enumerate(response.get("matches", [])):
             meta = match.get("metadata", {})
-            chunks.append({
-                "id":          meta.get("doc_id", match["id"]),
-                "text":        meta.get("text", ""),
-                "product_id":  meta.get("product_id"),
-                "source_type": meta.get("source_type", ""),
-                "dense_score": float(match.get("score", 0)),
-                "rank":        i,
-            })
+            chunks.append(
+                {
+                    "id": meta.get("doc_id", match["id"]),
+                    "text": meta.get("text", ""),
+                    "product_id": meta.get("product_id"),
+                    "source_type": meta.get("source_type", ""),
+                    "dense_score": float(match.get("score", 0)),
+                    "rank": i,
+                }
+            )
         return chunks
 
     except Exception as exc:
@@ -251,6 +257,7 @@ def _dense_retrieve(query: str, top_k: int = DENSE_TOP_K) -> list[dict]:
 
 
 # ── Reciprocal Rank Fusion ────────────────────────────────────────────────────
+
 
 def _reciprocal_rank_fusion(
     bm25_results: list[dict],
@@ -279,15 +286,15 @@ def _reciprocal_rank_fusion(
         doc_map[did] = doc
 
     ranked = sorted(scores.items(), key=lambda x: -x[1])
-    return [
-        {**doc_map[did], "rrf_score": score}
-        for did, score in ranked
-    ]
+    return [{**doc_map[did], "rrf_score": score} for did, score in ranked]
 
 
 # ── Cross-encoder reranking ───────────────────────────────────────────────────
 
-def _rerank(query: str, candidates: list[dict], top_n: int = RERANK_TOP_N) -> list[dict]:
+
+def _rerank(
+    query: str, candidates: list[dict], top_n: int = RERANK_TOP_N
+) -> list[dict]:
     """
     Cross-encoder reranking for precision.
     Uses ms-marco-MiniLM-L-6-v2 — small, fast, strong for passage reranking.
@@ -297,16 +304,15 @@ def _rerank(query: str, candidates: list[dict], top_n: int = RERANK_TOP_N) -> li
         from sentence_transformers import CrossEncoder
 
         model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2", max_length=512)
-        pairs = [[query, c["text"]] for c in candidates[:top_n * 2]]
+        pairs = [[query, c["text"]] for c in candidates[: top_n * 2]]
         ce_scores = model.predict(pairs)
 
         reranked = sorted(
-            zip(ce_scores, candidates[:top_n * 2]),
+            zip(ce_scores, candidates[: top_n * 2]),
             key=lambda x: -x[0],
         )
         return [
-            {**doc, "rerank_score": float(score)}
-            for score, doc in reranked[:top_n]
+            {**doc, "rerank_score": float(score)} for score, doc in reranked[:top_n]
         ]
 
     except Exception as exc:
@@ -315,6 +321,7 @@ def _rerank(query: str, candidates: list[dict], top_n: int = RERANK_TOP_N) -> li
 
 
 # ── Cart context builder ──────────────────────────────────────────────────────
+
 
 def _build_cart_summary(user) -> str:
     """Build a brief natural-language summary of the user's current cart."""
@@ -336,15 +343,16 @@ def _build_cart_summary(user) -> str:
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
+
 def retrieve(query: str, top_k: int = FINAL_CONTEXT) -> list[dict]:
     """
     Public retrieval function.
     Returns the top_k most relevant chunks after BM25 + dense + RRF + rerank.
     """
-    bm25_results   = _bm25_retrieve(query, top_k=BM25_TOP_K)
-    dense_results  = _dense_retrieve(query, top_k=DENSE_TOP_K)
-    fused          = _reciprocal_rank_fusion(bm25_results, dense_results)
-    reranked       = _rerank(query, fused, top_n=top_k)
+    bm25_results = _bm25_retrieve(query, top_k=BM25_TOP_K)
+    dense_results = _dense_retrieve(query, top_k=DENSE_TOP_K)
+    fused = _reciprocal_rank_fusion(bm25_results, dense_results)
+    reranked = _rerank(query, fused, top_n=top_k)
     return reranked
 
 
@@ -368,8 +376,7 @@ def generate(
         metadata dict: {prompt_tokens, completion_tokens, latency_ms, product_ids, provider, model}
     """
     context_text = "\n\n---\n\n".join(
-        f"[{c.get('source_type', 'product')}]\n{c['text']}"
-        for c in context_chunks
+        f"[{c.get('source_type', 'product')}]\n{c['text']}" for c in context_chunks
     )
     cart_summary = _build_cart_summary(user)
     system_content = SYSTEM_PROMPT.format(
@@ -399,10 +406,12 @@ def generate(
             gemini_history = []
             for turn in conversation_history[-6:]:
                 gemini_role = "model" if turn["role"] == "assistant" else "user"
-                gemini_history.append({
-                    "role":  gemini_role,
-                    "parts": [turn["content"]],
-                })
+                gemini_history.append(
+                    {
+                        "role": gemini_role,
+                        "parts": [turn["content"]],
+                    }
+                )
 
             chat = gemini_model.start_chat(history=gemini_history)
 
@@ -413,7 +422,7 @@ def generate(
                     full_response += delta
                     yield delta
                 try:
-                    prompt_tokens     = response.usage_metadata.prompt_token_count
+                    prompt_tokens = response.usage_metadata.prompt_token_count
                     completion_tokens = response.usage_metadata.candidates_token_count
                 except Exception:
                     pass
@@ -421,7 +430,7 @@ def generate(
                 response = chat.send_message(query, stream=False)
                 full_response = response.text or ""
                 try:
-                    prompt_tokens     = response.usage_metadata.prompt_token_count
+                    prompt_tokens = response.usage_metadata.prompt_token_count
                     completion_tokens = response.usage_metadata.candidates_token_count
                 except Exception:
                     pass
@@ -454,8 +463,8 @@ def generate(
                     temperature=0.4,
                     stream=False,
                 )
-                full_response     = response.choices[0].message.content or ""
-                prompt_tokens     = response.usage.prompt_tokens
+                full_response = response.choices[0].message.content or ""
+                prompt_tokens = response.usage.prompt_tokens
                 completion_tokens = response.usage.completion_tokens
                 yield full_response
 
@@ -470,17 +479,19 @@ def generate(
 
     latency_ms = int((time.time() - start) * 1000)
 
-    product_ids = list({
-        c["product_id"]
-        for c in context_chunks
-        if c.get("product_id") and c["product_id"] in full_response
-    })
+    product_ids = list(
+        {
+            c["product_id"]
+            for c in context_chunks
+            if c.get("product_id") and c["product_id"] in full_response
+        }
+    )
 
-    return {
-        "prompt_tokens":     prompt_tokens,
+    yield {
+        "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
-        "latency_ms":        latency_ms,
-        "product_ids":       product_ids,
-        "provider":          provider,
-        "model":             model_name,
+        "latency_ms": latency_ms,
+        "product_ids": product_ids,
+        "provider": provider,
+        "model": model_name,
     }

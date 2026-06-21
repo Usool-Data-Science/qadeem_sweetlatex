@@ -59,6 +59,7 @@ APPEND_SLASH = True
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -143,6 +144,11 @@ USE_I18N = True
 USE_TZ = True
 
 # Static & Media
+STORAGES = {
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+    },
+}
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
@@ -158,22 +164,22 @@ EMAIL_USE_TLS = as_bool(getenv("EMAIL_USE_TLS", "True"))
 DEFAULT_FROM_EMAIL = getenv("DEFAULT_FROM_EMAIL")
 
 # ── ML / AI settings ─────────────────────────────────────────────────────────
-LLM_PROVIDER      = getenv("LLM_PROVIDER", "gemini")
-LLM_MODEL_NAME    = getenv("LLM_MODEL_NAME", "gemini-1.5-flash")
-GOOGLE_API_KEY    = getenv("GOOGLE_API_KEY", "")
-OPENAI_API_KEY    = getenv("OPENAI_API_KEY", "")
-GROQ_API_KEY      = getenv("GROQ_API_KEY", "")
-OLLAMA_BASE_URL   = getenv("OLLAMA_BASE_URL", "http://ollama:11434/v1")
+LLM_PROVIDER = getenv("LLM_PROVIDER", "gemini")
+LLM_MODEL_NAME = getenv("LLM_MODEL_NAME", "gemini-1.5-flash")
+GOOGLE_API_KEY = getenv("GOOGLE_API_KEY", "")
+OPENAI_API_KEY = getenv("OPENAI_API_KEY", "")
+GROQ_API_KEY = getenv("GROQ_API_KEY", "")
+OLLAMA_BASE_URL = getenv("OLLAMA_BASE_URL", "http://ollama:11434/v1")
 
-PINECONE_API_KEY    = getenv("PINECONE_API_KEY", "")
+PINECONE_API_KEY = getenv("PINECONE_API_KEY", "")
 PINECONE_INDEX_NAME = getenv("PINECONE_INDEX_NAME", "sweetlatex-rag")
-PINECONE_DIMENSION  = int(getenv("PINECONE_DIMENSION", "384"))
+PINECONE_DIMENSION = int(getenv("PINECONE_DIMENSION", "384"))
 
-CLIP_MODEL_NAME   = getenv("CLIP_MODEL_NAME", "ViT-B/32")
-FAISS_INDEX_PATH  = getenv("FAISS_INDEX_PATH", "/app/faiss_index")
+CLIP_MODEL_NAME = getenv("CLIP_MODEL_NAME", "ViT-B/32")
+FAISS_INDEX_PATH = getenv("FAISS_INDEX_PATH", "/app/faiss_index")
 SASREC_MODEL_PATH = getenv("SASREC_MODEL_PATH", "/app/ml_models/sasrec.pt")
-BPR_MODEL_PATH    = getenv("BPR_MODEL_PATH", "/app/ml_models/bpr.pkl")
+BPR_MODEL_PATH = getenv("BPR_MODEL_PATH", "/app/ml_models/bpr.pkl")
 
 FUSION_ALPHA = float(getenv("FUSION_ALPHA", "0.35"))
-FUSION_BETA  = float(getenv("FUSION_BETA",  "0.40"))
+FUSION_BETA = float(getenv("FUSION_BETA", "0.40"))
 FUSION_GAMMA = float(getenv("FUSION_GAMMA", "0.25"))

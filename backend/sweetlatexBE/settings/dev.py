@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 
 from .base import *
 
+print(GOOGLE_API_KEY)
 # -----------------------------------------------------------------------------
 # Load environment variables
 # -----------------------------------------------------------------------------
