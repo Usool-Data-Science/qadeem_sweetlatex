@@ -26,10 +26,11 @@ FROM python:3.12-slim AS runtime
 
 WORKDIR /app
 
-# Runtime system deps only (libpq for psycopg2, curl for healthcheck)
+# Runtime system deps only (libpq for psycopg2, curl for healthcheck, pg_isready for Postgres checks)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     curl \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder — keeps final image lean

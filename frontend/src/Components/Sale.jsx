@@ -3,6 +3,7 @@ import Body from "./Body";
 import Carousel from "./Carousel";
 import { useNavigate, useParams } from "react-router-dom";
 import { useState } from "react";
+import { useSelector } from "react-redux";
 import { toast } from "sonner";
 import { useGetProductDetailsQuery } from "../redux/features/product/productApiSlice";
 import {
@@ -10,6 +11,8 @@ import {
   useGetCartQuery,
 } from "../redux/features/cart/cartApiSlice";
 import { useRetrieveUserQuery } from "../redux/features/auth/authApiSlice";
+import { useLogInteractionMutation } from "../redux/features/interactions/interactionsApiSlice";
+import { SimilarItemsCarousel } from "./RecommendationCarousel";
 
 const Sale = () => {
   const { id } = useParams();
@@ -18,25 +21,44 @@ const Sale = () => {
   const [selectedSize, setSelectedSize] = useState("");
   const [selectedQuantity, setSelectedQuantity] = useState(1);
 
-  // ── data fetching ────────────────────────────────────────────────
+  const { isAuthenticated } = useSelector((state) => state.auth);
+
+  // ── data fetching ──────────────────────────────────────────────────────────
   const { data: product, isLoading, isError } = useGetProductDetailsQuery(id);
 
-  const { data: user } = useRetrieveUserQuery(undefined, { skip: false });
+  // Fixed: skip when not authenticated — prevents 401 console noise
+  const { data: user } = useRetrieveUserQuery(undefined, {
+    skip: !isAuthenticated,
+  });
 
   const { data: cart } = useGetCartQuery(undefined, { skip: !user });
 
   const [addToCart] = useAddToCartMutation();
+  const [logInteraction] = useLogInteractionMutation();
 
   const productCountInCart =
     cart?.items?.find((item) => item.product_id === id)?.quantity ?? 0;
 
-  // ── unified availability logic ───────────────────────────────────
+  // Log a CLICK interaction when the product page loads
+  // useEffect equivalent: log once when product data arrives
+  const [clickLogged, setClickLogged] = useState(false);
+  if (product && !clickLogged) {
+    setClickLogged(true);
+    logInteraction({
+      product: id,
+      interaction_type: "click",
+      session_key: localStorage.getItem("session_key") || "",
+      metadata: {},
+    });
+  }
+
+  // ── unified availability logic ─────────────────────────────────────────────
   const isExpired = product?.is_expired;
   const isSoldOut = product?.is_sold_out || product?.quantity === 0;
   const isUnavailable = isExpired || isSoldOut;
   const isAvailableForPreorder = !isUnavailable;
 
-  // ── handlers ────────────────────────────────────────────────────
+  // ── handlers ──────────────────────────────────────────────────────────────
   const handleSize = (e) => {
     e.preventDefault();
     setSelectedSize(e.target.textContent);
@@ -73,7 +95,7 @@ const Sale = () => {
     }
   };
 
-  // ── render states ────────────────────────────────────────────────
+  // ── render states ──────────────────────────────────────────────────────────
   if (isLoading) {
     return (
       <Body>
@@ -179,7 +201,7 @@ const Sale = () => {
               {product.artist_website}
             </a>
 
-            {/* ── PRODUCT AVAILABLE SECTION ───────────────────────── */}
+            {/* ── PRODUCT AVAILABLE SECTION ────────────────────────── */}
             {isAvailableForPreorder ? (
               <>
                 <p>Composition: {product.composition}</p>
@@ -222,12 +244,10 @@ const Sale = () => {
                     value={selectedQuantity}
                     onChange={(e) => {
                       const value = Number(e.target.value);
-
                       if (!value) {
                         setSelectedQuantity(1);
                         return;
                       }
-
                       setSelectedQuantity(
                         Math.max(Math.min(product.total_in_stock, value)),
                       );
@@ -242,13 +262,12 @@ const Sale = () => {
                     border border-gray-200 px-4 py-2 w-fit
                     hover:bg-white hover:text-black hover:font-bold
                     transition-all duration-200
-
                     disabled:opacity-40
                     disabled:cursor-not-allowed
                     disabled:hover:bg-transparent
                     disabled:hover:text-gray-200
                     disabled:hover:font-normal
-  "
+                  "
                   onClick={handlePreorder}
                   disabled={
                     isUnavailable ||
@@ -269,6 +288,12 @@ const Sale = () => {
               </p>
             )}
           </div>
+        </div>
+
+        {/* ── Similar Items Carousel ────────────────────────────────────────── */}
+        {/* Rendered below the product detail panel — queries CLIP/FAISS */}
+        <div className="lg:mx-10 mt-8">
+          <SimilarItemsCarousel productId={id} />
         </div>
       </div>
 

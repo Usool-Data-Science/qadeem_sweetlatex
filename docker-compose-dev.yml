@@ -150,6 +150,7 @@ services:
   frontend:
     build:
       context: ./frontend
+      dockerfile: Dockerfile.stagging
     restart: unless-stopped
     container_name: frontend
     ports:
