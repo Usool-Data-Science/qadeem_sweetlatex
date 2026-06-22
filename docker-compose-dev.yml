@@ -112,6 +112,8 @@ services:
     volumes:
       - static_files:/app/staticfiles
       - media_files:/app/media
+      - sqlite_data:/app/sqlite
+      - postgres_backups:/backups
       # ML worker needs read/write access to the same artefact volumes
       - faiss_index:/app/faiss_index
       - ml_models:/app/ml_models
