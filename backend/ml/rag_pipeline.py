@@ -109,12 +109,12 @@ def _get_model_name(provider: str) -> str:
     if configured:
         return configured
     defaults = {
-        "gemini": "gemini-1.5-flash",
+        "gemini": "gemini-2.5-flash",
         "openai": "gpt-4o-mini",
         "groq": "llama-3.1-8b-instant",
         "ollama": "llama3.1:8b",
     }
-    return defaults.get(provider, "gemini-1.5-flash")
+    return defaults.get(provider, "gemini-2.5-flash")
 
 
 # ── BM25 retrieval ────────────────────────────────────────────────────────────

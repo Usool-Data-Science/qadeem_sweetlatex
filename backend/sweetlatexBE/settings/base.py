@@ -174,7 +174,7 @@ DEFAULT_FROM_EMAIL = getenv("DEFAULT_FROM_EMAIL")
 
 # ── ML / AI settings ─────────────────────────────────────────────────────────
 LLM_PROVIDER = getenv("LLM_PROVIDER", "gemini")
-LLM_MODEL_NAME = getenv("LLM_MODEL_NAME", "gemini-1.5-flash")
+LLM_MODEL_NAME = getenv("LLM_MODEL_NAME", "gemini-2.5-flash")
 GOOGLE_API_KEY = getenv("GOOGLE_API_KEY", "")
 OPENAI_API_KEY = getenv("OPENAI_API_KEY", "")
 GROQ_API_KEY = getenv("GROQ_API_KEY", "")

@@ -31,7 +31,9 @@ services:
       retries: 5
 
   api:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.local
     container_name: api
     command: gunicorn -c gunicorn_config.py sweetlatexBE.wsgi
     restart: always
@@ -109,7 +111,7 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile.stagging
+      dockerfile: Dockerfile.local
     restart: unless-stopped
     container_name: frontend
     ports:
