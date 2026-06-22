@@ -18,13 +18,22 @@ def celery_test():
 
 @shared_task
 def upload_image_to_cloudinary(target_obj, image_id):
+    """
+    Now that STORAGES["default"] = CloudinaryStorage, Django saves the image
+    directly to Cloudinary when the ImageField is saved. The image_url and
+    public_id are therefore already available on the model instance.
+
+    This task now just reads those values back from Cloudinary storage and
+    updates image_url / public_id on the row — without re-uploading anything.
+    """
     if isinstance(image_id, str):
         try:
             image_id = UUID(image_id)
         except ValueError:
             pass
+
     OBJECTS = {"artist": ArtistImage, "product": ProductImage}
-    print(f"CELERY: Processing image {image_id}")
+    print(f"CELERY: Syncing image metadata for {image_id}")
 
     try:
         image_obj = OBJECTS[target_obj].objects.get(id=image_id)
@@ -33,17 +42,22 @@ def upload_image_to_cloudinary(target_obj, image_id):
             print("No image file found")
             return
 
-        upload_result = cloudinary.uploader.upload(image_obj.image.path)
+        # CloudinaryStorage saves to Cloudinary on .save() — the image field
+        # name IS the Cloudinary public_id. We build the secure URL from it.
+        # image.name is the Cloudinary public_id (e.g. "products/abc123.jpg")
+        public_id = image_obj.image.name
 
-        image_obj.image_url = upload_result["secure_url"]
-        image_obj.public_id = upload_result["public_id"]
+        # Build the secure Cloudinary URL
+        from cloudinary.utils import cloudinary_url
 
-        # delete local file AFTER upload
-        image_obj.image.delete(save=False)
+        secure_url, _ = cloudinary_url(public_id, secure=True)
 
-        image_obj.save()
+        image_obj.image_url = secure_url
+        image_obj.public_id = public_id
+        image_obj.save(update_fields=["image_url", "public_id"])
 
-        print(f"Upload of image-{image_id} complete")
+        print(f"Image metadata synced for {image_id}: {secure_url}")
+
     except Exception as e:
         print("CELERY ERROR:", str(e))
 
@@ -70,9 +84,7 @@ def contact_us_task(email, subject=None, body=None):
             subject,
             txt_msg,
             settings.DEFAULT_FROM_EMAIL,
-            [
-                settings.DEFAULT_FROM_EMAIL,
-            ],
+            [settings.DEFAULT_FROM_EMAIL],
             fail_silently=False,
             html_message=html_msg,
         )
@@ -94,9 +106,7 @@ def send_order_confirmation_email(email, order_id):
             subject,
             txt_msg,
             settings.DEFAULT_FROM_EMAIL,
-            [
-                email,
-            ],
+            [email],
             fail_silently=False,
             html_message=html_msg,
         )
@@ -114,7 +124,6 @@ def release_unpaid_order_stock(order_id):
     """
     try:
         with transaction.atomic():
-            # Select for update to prevent race conditions during the release
             order = Order.objects.select_for_update().get(
                 order_id=order_id, status=Order.OrderStatus.PENDING
             )
@@ -129,5 +138,4 @@ def release_unpaid_order_stock(order_id):
             print(f"Stock released for expired Order {order_id}")
 
     except Order.DoesNotExist:
-        # Order was either already completed or doesn't exist
         pass
