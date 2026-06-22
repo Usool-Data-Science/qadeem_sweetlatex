@@ -39,6 +39,8 @@ THIRD_PARTY_APPS = [
     "social_django",
     "djoser",
     "django_celery_beat",
+    "cloudinary_storage",
+    "cloudinary",
 ]
 
 INSTALLED_APPS = [
@@ -145,6 +147,13 @@ USE_TZ = True
 
 # Static & Media
 STORAGES = {
+    # "default" handles all file/image field uploads (ImageField, FileField).
+    # Your project uses Cloudinary for media — keep it here.
+    "default": {
+        "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
+    },
+    # "staticfiles" handles collectstatic and static file serving.
+    # WhiteNoise serves them efficiently through Gunicorn without Nginx.
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
     },

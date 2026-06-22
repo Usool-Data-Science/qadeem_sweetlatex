@@ -1,6 +1,9 @@
 # Created by https://www.toptal.com/developers/gitignore/api/react,django,python,redis
 # Edit at https://www.toptal.com/developers/gitignore?templates=react,django,python,redis
 
+### Testing files ###
+test.html
+
 ### Django ###
 *.log
 *.pot
