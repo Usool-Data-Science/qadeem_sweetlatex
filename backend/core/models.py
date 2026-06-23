@@ -188,7 +188,8 @@ class CartItem(BaseModel):
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name="items")
     quantity = models.PositiveIntegerField()
-    size = models.ForeignKey(ProductSize, on_delete=models.CASCADE)
+    # This is already handled by product above, so we need to avoid integrity error
+    size = models.ForeignKey(ProductSize, on_delete=models.SET_NULL, null=True)
 
     @property
     def item_subtotal(self):
