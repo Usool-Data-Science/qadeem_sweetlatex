@@ -99,7 +99,18 @@ const Carousel = ({ title, icon: Icon, products, isLoading, badge }) => {
     });
   };
 
-  if (!isLoading && (!products || products.length === 0)) return null;
+  if (!isLoading && (!products || products.length === 0)) {
+    return (
+      <div className="my-10 px-1">
+        <h2 className="text-white text-lg font-medium tracking-wide">
+          You Might Also Like
+        </h2>
+        <p className="text-zinc-400 text-sm mt-2">
+          No recommendations available.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="my-10">
