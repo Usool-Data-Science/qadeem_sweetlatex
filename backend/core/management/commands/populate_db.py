@@ -73,7 +73,7 @@ class Command(BaseCommand):
                 artists.append(artist)
 
             # 3. Create Products
-            for i in range(10):
+            for i in range(100):
                 # Calculate a future deadline
                 random_days = random.randint(5, 30)
                 future_deadline = timezone.now() + timedelta(days=random_days)
