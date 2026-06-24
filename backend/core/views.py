@@ -2,6 +2,7 @@ import json
 
 import stripe
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.db.models import F
 from django.shortcuts import get_object_or_404
@@ -39,6 +40,35 @@ from .serializers import (
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
+# ── Cache helpers ─────────────────────────────────────────────────────────────
+PRODUCT_CACHE_PREFIX = "product_list_cache"
+PRODUCT_CACHE_TTL = 60 * 60 * 2  # 2 hours
+PAGE_SIZE_DEFAULT = 9
+PAGE_SIZE_MAX = 50
+
+
+def _invalidate_product_cache():
+    """
+    Delete all cached product list pages.
+
+    Uses django-redis `delete_pattern` when available (production Redis).
+    Falls back to a manual key sweep for other backends (e.g. LocMemCache in dev).
+    Works by iterating the known page range and deleting each key explicitly
+    so it doesn't rely on pattern matching.
+    """
+    try:
+        # Redis backend — fast wildcard delete
+        cache.delete_pattern(f"*{PRODUCT_CACHE_PREFIX}*")
+    except AttributeError:
+        # Non-Redis backend (e.g. LocMemCache) — delete known key patterns
+        # This covers pages 1–20 with sizes 6, 9, 12 which covers all realistic usage
+        for page in range(1, 21):
+            for size in [6, 9, 12, PAGE_SIZE_DEFAULT]:
+                cache.delete(f"{PRODUCT_CACHE_PREFIX}:page{page}:size{size}")
+
+
+# ── Contact ───────────────────────────────────────────────────────────────────
+
 
 class ContactView(APIView):
     authentication_classes = ()
@@ -60,35 +90,62 @@ class ContactView(APIView):
         )
 
 
+# ── Products ──────────────────────────────────────────────────────────────────
+
+
 class ProductListView(APIView):
     permission_classes = [AllowAny]
 
-    @method_decorator(cache_page(60 * 60 * 2, key_prefix="product_list_cache"))
+    @method_decorator(cache_page(PRODUCT_CACHE_TTL, key_prefix=PRODUCT_CACHE_PREFIX))
     def get(self, request):
-        # 1. Get limit and offset from the URL (e.g., /products/?limit=10&offset=0)
-        # Default to None if not provided to keep it backward compatible
-        limit = request.query_params.get("limit")
-        offset = request.query_params.get("offset")
+        """
+        GET /api/products/?page=1&page_size=9
 
-        # Optimization: prefetch images and sizes
+        Returns paginated products with total count and pagination metadata.
+        The cache key includes all query params so different pages are cached
+        independently. Cache is invalidated on every create/update/delete.
+
+        Response shape:
+        {
+            "products":    [...],
+            "total":       42,
+            "page":        1,
+            "page_size":   9,
+            "total_pages": 5,
+            "has_next":    true,
+            "has_prev":    false
+        }
+        """
+        try:
+            page = max(1, int(request.query_params.get("page", 1)))
+            page_size = min(
+                PAGE_SIZE_MAX,
+                max(1, int(request.query_params.get("page_size", PAGE_SIZE_DEFAULT))),
+            )
+        except (ValueError, TypeError):
+            page = 1
+            page_size = PAGE_SIZE_DEFAULT
+
         products = Product.objects.prefetch_related("images", "sizes").all()
+        total = products.count()
 
-        # 2. Get total count BEFORE slicing (needed for frontend pagination math)
-        total_count = products.count()
+        offset = (page - 1) * page_size
+        products = products[offset : offset + page_size]
 
-        # 3. Apply slicing if limit and offset are provided
-        if limit is not None and offset is not None:
-            try:
-                limit = int(limit)
-                offset = int(offset)
-                products = products[offset : offset + limit]
-            except ValueError:
-                pass  # Or handle error for invalid integers
+        total_pages = max(1, (total + page_size - 1) // page_size)
 
         serializer = ProductSerializer(products, many=True)
-
-        # 4. Return both the data AND the total count
-        return Response({"products": serializer.data, "total": total_count})
+        return Response(
+            {
+                "products": serializer.data,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "has_next": page < total_pages,
+                "has_prev": page > 1,
+            }
+        )
 
 
 class SingleProductView(AdminApiAuthMixin, APIView):
@@ -104,63 +161,53 @@ class SingleProductView(AdminApiAuthMixin, APIView):
         product = get_object_or_404(
             Product.objects.prefetch_related("images", "sizes"), product_id=id
         )
-        serializer = ProductSerializer(product)
-        return Response(serializer.data)
+        return Response(ProductSerializer(product).data)
 
     @transaction.atomic
     def post(self, request):
         data = request.data
         artist = get_object_or_404(Artist, name=data.get("artist_name"))
 
-        # Create Product
         product = Product.objects.create(
             title=data["title"],
             artist=artist,
             goal=int(data.get("goal", 0)),
-            deadline=data.get("deadline"),  # Ensure this is a datetime string
+            deadline=data.get("deadline"),
             color=data.get("color", ""),
             style=data.get("style", ""),
             composition=data.get("composition", ""),
             price=float(data.get("price", 0)),
         )
 
-        # Create sizes - Logic handled safely
         sizes_data = data.get("sizes", [])
         if isinstance(sizes_data, str):
             sizes_data = json.loads(sizes_data)
-
         for s in sizes_data:
             ProductSize.objects.create(
                 product=product, size=s["size"], stock=int(s.get("stock", 0))
             )
 
-        # Create images
         for img in request.FILES.getlist("images"):
             ProductImage.objects.create(product=product, image=img)
 
+        _invalidate_product_cache()
         return Response(ProductSerializer(product).data, status=201)
 
     def patch(self, request, id, *args, **kwargs):
-        try:
-            product = Product.objects.get(product_id=id)
-        except Product.DoesNotExist:
-            return Response({"error": "Product not found"}, status=404)
-
+        product = get_object_or_404(Product, product_id=id)
         serializer = ProductSerializer(product, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            _invalidate_product_cache()
             return Response(serializer.data)
         return Response(serializer.errors, status=400)
 
     def put(self, request, id, *args, **kwargs):
-        try:
-            product = Product.objects.get(product_id=id)
-        except Product.DoesNotExist:
-            return Response({"error": "Product not found"}, status=404)
-
+        product = get_object_or_404(Product, product_id=id)
         serializer = ProductSerializer(product, data=request.data, partial=False)
         if serializer.is_valid():
             serializer.save()
+            _invalidate_product_cache()
             return Response(serializer.data)
         return Response(serializer.errors, status=400)
 
@@ -169,15 +216,13 @@ class SingleProductView(AdminApiAuthMixin, APIView):
             return Response(
                 {"error": "Product Id is required!"}, status=status.HTTP_400_BAD_REQUEST
             )
-        try:
-            product = Product.objects.get(product_id=id)
-        except Product.DoesNotExist:
-            return Response(
-                {"error": "Product does not exist!"}, status=status.HTTP_404_NOT_FOUND
-            )
+        product = get_object_or_404(Product, product_id=id)
         product.delete()
-
+        _invalidate_product_cache()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ── Artists ───────────────────────────────────────────────────────────────────
 
 
 class ArtistView(AdminApiAuthMixin, APIView):
@@ -191,104 +236,62 @@ class SingleArtistView(AdminApiAuthMixin, APIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def get(self, request, id, *args, **kwargs):
-        if not id:
-            return Response(
-                {"error": "Artist Id is required!"}, status=status.HTTP_400_BAD_REQUEST
-            )
-        try:
-            artist = Artist.objects.get(id=id)
-        except Artist.DoesNotExist:
-            return Response(
-                {"error": "Artist does not exist"}, status=status.HTTP_404_NOT_FOUND
-            )
-
+        artist = get_object_or_404(Artist, id=id)
         serializer = ArtistSerializer(artist, many=False)
         return Response(serializer.data)
 
     def post(self, request):
-        data = request.data
         image = request.FILES.get("image")
-
-        serializer = ArtistSerializer(data=data)
+        serializer = ArtistSerializer(data=request.data)
         if serializer.is_valid():
             with transaction.atomic():
                 artist = serializer.save()
-
                 if image:
                     ArtistImage.objects.create(image=image, artist=artist)
-
             return Response(serializer.data, status=201)
-
         return Response(serializer.errors, status=400)
 
     def put(self, request, id=None):
-        if not id:
-            return Response({"error": "Artist Id is required!"}, status=400)
-
-        try:
-            artist = Artist.objects.get(id=id)
-        except Artist.DoesNotExist:
-            return Response({"error": "Artist not found"}, status=404)
-
+        artist = get_object_or_404(Artist, id=id)
         serializer = ArtistSerializer(artist, data=request.data)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
-
         return Response(serializer.errors, status=400)
 
     def patch(self, request, id=None):
-        try:
-            artist = Artist.objects.get(id=id)
-        except Artist.DoesNotExist:
-            return Response({"error": "Artist not found"}, status=404)
-
+        artist = get_object_or_404(Artist, id=id)
         serializer = ArtistSerializer(artist, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
-
         return Response(serializer.errors, status=400)
 
     def delete(self, request, id=None):
-        if not id:
-            return Response(
-                {"error": "Artist Id is required!"}, status=status.HTTP_400_BAD_REQUEST
-            )
-        try:
-            artist = Artist.objects.get(id=id)
-        except Artist.DoesNotExist:
-            return Response(
-                {"error": "Artist does not exist!"}, status=status.HTTP_404_NOT_FOUND
-            )
+        artist = get_object_or_404(Artist, id=id)
         artist.delete()
-
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+# ── Cart ──────────────────────────────────────────────────────────────────────
+
+
 class CartView(APIView):
-    # Remove IsAuthenticated to allow guests
     permission_classes = [AllowAny]
     throttle_scope = "cart"
 
     def get_cart_query(self, request):
-        """Helper to find cart by user or session."""
         if request.user.is_authenticated:
             return Cart.objects.get_or_create(user=request.user)
-
         session_id = request.headers.get("X-Session-ID")
         if not session_id:
-            # You can also use Django's built-in session_key
             request.session.create()
             session_id = request.session.session_key
-
         return Cart.objects.get_or_create(session_id=session_id)
 
     def get(self, request, *args, **kwargs):
         cart, _ = self.get_cart_query(request)
-
-        serializer = CartSerializer(cart)
-        return Response(serializer.data)
+        return Response(CartSerializer(cart).data)
 
     def post(self, request):
         cart, _ = self.get_cart_query(request)
@@ -296,32 +299,21 @@ class CartView(APIView):
         size_value = request.data.get("size")
         product_id = request.data.get("product_id")
 
-        size = get_object_or_404(
-            ProductSize,
-            product_id=product_id,
-            size=size_value,
-        )
+        size = get_object_or_404(ProductSize, product_id=product_id, size=size_value)
 
-        # Atomic update or create
         item, created = CartItem.objects.get_or_create(
-            cart=cart,
-            size=size,
-            product_id=product_id,
-            defaults={"quantity": quantity},
+            cart=cart, size=size, product_id=product_id, defaults={"quantity": quantity}
         )
         if not created:
             item.quantity += quantity
         if item.quantity > size.stock:
             return Response(
-                {"error": f"Only {size.stock} items left in stock."},
-                status=400,
+                {"error": f"Only {size.stock} items left in stock."}, status=400
             )
         item.save()
-
         return Response(CartSerializer(cart).data, status=201)
 
     def delete(self, request):
-        """Clear the entire cart."""
         cart, _ = self.get_cart_query(request)
         cart.items.all().delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -332,22 +324,18 @@ class CartItemDetailView(APIView):
     throttle_scope = "cart"
 
     def get_cart_item(self, request, item_id):
-        """Find cart item for either authenticated user or guest session."""
         if request.user.is_authenticated:
             return get_object_or_404(CartItem, id=item_id, cart__user=request.user)
-
         session_id = request.headers.get("X-Session-ID")
         return get_object_or_404(CartItem, id=item_id, cart__session_id=session_id)
 
     def patch(self, request, item_id):
         action = request.data.get("action")
         item = self.get_cart_item(request, item_id)
-
         if action == "incr":
             item.quantity += 1
         elif action == "decr":
             item.quantity = max(1, item.quantity - 1)
-
         item.save()
         return Response(status=status.HTTP_200_OK)
 
@@ -357,13 +345,15 @@ class CartItemDetailView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+# ── Checkout ──────────────────────────────────────────────────────────────────
+
+
 class CheckoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     @transaction.atomic
     def post(self, request):
         user = request.user
-        # Use select_related to get the cart and user in one go
         cart = get_object_or_404(Cart, user=user)
 
         if not cart.items.exists():
@@ -373,7 +363,6 @@ class CheckoutView(APIView):
         cart_items = cart.items.select_related("product", "size")
         items_to_create = []
 
-        # 1. Initial Stock Check (Quick fail before we start creating objects)
         for item in cart_items:
             if item.size.stock < item.quantity:
                 return Response(
@@ -383,7 +372,6 @@ class CheckoutView(APIView):
                     status=400,
                 )
             items_to_create.append(item)
-
             line_items.append(
                 {
                     "price_data": {
@@ -397,22 +385,16 @@ class CheckoutView(APIView):
                 }
             )
 
-        # 2. Create the Order Record
         order = Order.objects.create(user=user, status=Order.OrderStatus.PENDING)
 
-        # 3. Reserve Stock and Create OrderItems
         for item in items_to_create:
-            # The "updated" check ensures concurrency safety
             updated = ProductSize.objects.filter(
                 id=item.size.id, stock__gte=item.quantity
             ).update(stock=F("stock") - item.quantity)
-
             if not updated:
-                # Trigger rollback if stock was snatched by someone else in the last millisecond
                 raise Exception(
                     f"Stock changed for {item.product.title} during checkout."
                 )
-
             OrderItem.objects.create(
                 order=order,
                 product=item.product,
@@ -421,11 +403,8 @@ class CheckoutView(APIView):
                 price_at_purchase=item.product.price,
             )
 
-        # 4. Schedule the "Stock Release" Task (30-minute window to pay)
-        # We pass the order_id as a string because UUIDs aren't always JSON serializable for Celery
         release_unpaid_order_stock.apply_async((str(order.order_id),), countdown=1800)
 
-        # 5. Create Stripe Session
         try:
             checkout_session = stripe.checkout.Session.create(
                 customer_email=user.email,
@@ -438,8 +417,10 @@ class CheckoutView(APIView):
             )
             return Response({"session_url": checkout_session.url})
         except Exception as e:
-            # Transaction atomic rolls back the Order and the Stock deductions
             return Response({"error": str(e)}, status=500)
+
+
+# ── Orders ────────────────────────────────────────────────────────────────────
 
 
 class OrderView(APIView):
@@ -447,9 +428,7 @@ class OrderView(APIView):
 
     def get(self, request, *args, **kwargs):
         orders = Order.objects.filter(user=request.user)
-
-        response = OrderSerializer(orders, many=True).data
-        return Response(response)
+        return Response(OrderSerializer(orders, many=True).data)
 
 
 class SingleOrderView(APIView):
@@ -458,6 +437,9 @@ class SingleOrderView(APIView):
     def get(self, request, id):
         order = get_object_or_404(Order, order_id=id, user=request.user)
         return Response(OrderSerializer(order).data)
+
+
+# ── Stripe webhook ────────────────────────────────────────────────────────────
 
 
 @api_view(["POST"])
@@ -477,22 +459,14 @@ def stripe_webhook(request):
             event["data"]["object"].id, expand=["line_items", "customer"]
         )
         order_id = session["metadata"]["order_id"]
-
         if order_id:
             with transaction.atomic():
                 try:
-                    # select_for_update locks the row so Celery and Webhook don't collide
                     order = Order.objects.select_for_update().get(order_id=order_id)
-
                     if order.status == Order.OrderStatus.PENDING:
                         order.status = Order.OrderStatus.COMPLETED
                         order.save()
-
-                        # Clear ONLY the items, keep the Cart object itself
                         CartItem.objects.filter(cart__user=order.user).delete()
-
-                        # Trigger email
-                        # send_order_confirmation.delay(str(order.order_id))
                 except Order.DoesNotExist:
                     return Response({"error": "Order not found"}, status=404)
 
