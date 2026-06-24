@@ -10,8 +10,14 @@ import {
 import VisualSearchModal from "../Components/VisualSearchModal";
 
 const HomePage = () => {
-  const { products, isLoading } = useProduct();
+  const PAGE_SIZE = 9;
+  const [page, setPage] = useState(1);
+  const { data, isLoading, isFetching } = useProduct(page, PAGE_SIZE);
   const [visualSearchOpen, setVisualSearchOpen] = useState(false);
+
+  const handlePageChange = (newPage) => {
+    setPage(newPage);
+  };
 
   if (isLoading) {
     return (
@@ -38,7 +44,12 @@ const HomePage = () => {
       <ForYouCarousel />
 
       {/* Main product listing */}
-      <GeneralPage products={products?.products} />
+      <GeneralPage
+        data={data}
+        page={page}
+        onPageChange={handlePageChange}
+        isFetching={isFetching}
+      />
 
       {/* Trending section below main listing */}
       <TrendingCarousel />

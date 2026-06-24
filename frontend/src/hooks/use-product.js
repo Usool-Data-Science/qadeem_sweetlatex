@@ -24,7 +24,7 @@ export default function useProduct(page = 1, pageSize = 9) {
   );
 
   return {
-    products: data, // full response: { products, total, page, total_pages, ... }
+    data, // full response: { products, total, page, total_pages, ... }
     isLoading,
     isFetching, // true when fetching a new page (not first load)
   };
