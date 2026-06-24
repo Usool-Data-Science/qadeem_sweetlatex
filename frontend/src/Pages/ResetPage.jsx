@@ -52,8 +52,6 @@ export default function ResetPage() {
 
       navigate("/login");
     } catch (error) {
-      console.log(error);
-
       if (error?.data) {
         setFormErrors(error.data);
       } else {

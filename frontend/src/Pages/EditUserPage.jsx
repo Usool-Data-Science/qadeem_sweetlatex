@@ -54,8 +54,6 @@ const EditUser = () => {
       toast.success("Changes saved successfully!");
       navigate("/myaccount");
     } catch (err) {
-      console.log("UPDATE ERROR:", err);
-
       toast.error(
         err?.data?.detail ||
           err?.data?.message ||

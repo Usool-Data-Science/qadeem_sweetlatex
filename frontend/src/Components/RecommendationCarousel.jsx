@@ -198,7 +198,7 @@ export const TrendingCarousel = () => {
 };
 
 export const SimilarItemsCarousel = ({ productId }) => {
-  const { data, isLoading } = useGetSimilarItemsQuery(
+  const queryResult = useGetSimilarItemsQuery(
     { productId, top_k: 12 },
     { skip: !productId },
   );
@@ -207,8 +207,8 @@ export const SimilarItemsCarousel = ({ productId }) => {
     <Carousel
       title="You Might Also Like"
       icon={MdOutlineAutoAwesome}
-      products={data?.results}
-      isLoading={isLoading}
+      products={queryResult.data?.results}
+      isLoading={queryResult.isLoading}
     />
   );
 };

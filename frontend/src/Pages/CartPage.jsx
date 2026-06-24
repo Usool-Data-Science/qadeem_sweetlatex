@@ -49,7 +49,6 @@ const Cart = () => {
         window.location.href = result.cancel_url;
       }
     } catch (error) {
-      console.log(error);
       toast.error(getErrorMessage(error));
     } finally {
       setIsCheckingOut(false);

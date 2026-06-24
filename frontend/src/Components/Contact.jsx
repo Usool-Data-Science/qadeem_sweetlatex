@@ -49,8 +49,6 @@ const ContactPage = () => {
       clearForm();
       toast.success("Message received!");
     } catch (error) {
-      console.log(error);
-
       setFormErrors(
         error?.data || {
           general: "Something went wrong. Please try again.",
